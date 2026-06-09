@@ -753,7 +753,9 @@ function App() {
     });
 
     // 3. プロキシ動画の生成 (非同期実行 - 音声のみでない場合のみ)
-    if (!isAudioOnly) {
+    // 既定では生成しない（長尺の全体トランスコードは時間がかかり、生成中もアプリが重くなるため）。
+    // 元動画で直接再生し、重い4K素材などで必要なユーザーだけ環境設定でONにする。
+    if (!isAudioOnly && preferencesRef.current.autoProxy) {
       invoke<string>('generate_proxy_video', {
         videoPath: selected,
         threads: preferencesRef.current.ffmpegThreads,
@@ -1694,8 +1696,8 @@ function App() {
       addRecentProject(path);
       setStatusText(`プロジェクトを読み込みました: ${path.split(/[\\/]/).pop()}`);
 
-      // プロキシ再生に必要なプロセスを確認
-      for (const track of projectData.tracks) {
+      // プロキシ再生に必要なプロセスを確認（環境設定でONのときのみ）
+      for (const track of (preferencesRef.current.autoProxy ? projectData.tracks : [])) {
         if (!track.proxyPath && !track.isAudioOnly) {
           setStatusText(`プロキシ動画を再生成中: ${track.name}`);
           invoke<string>('generate_proxy_video', {

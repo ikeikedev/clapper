@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 
 export interface AppPreferences {
   projectFps: 24 | 29.97 | 30 | 60;
+  autoProxy: boolean;
   ffmpegThreads: number;
   proxyResolution: string;
   proxyCrf: number;
@@ -11,6 +12,7 @@ export interface AppPreferences {
 
 export const DEFAULT_PREFERENCES: AppPreferences = {
   projectFps: 60,
+  autoProxy: false,
   ffmpegThreads: 2,
   proxyResolution: "scale=-2:720",
   proxyCrf: 26,
@@ -162,7 +164,24 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({ onClose, onS
             </h3>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {/* プロキシ自動生成 ON/OFF（既定OFF） */}
               <div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: '#cbd5e1', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={prefs.autoProxy}
+                    onChange={e => setPrefs(prev => ({ ...prev, autoProxy: e.target.checked }))}
+                    style={{ width: '16px', height: '16px', accentColor: '#10b981', cursor: 'pointer' }}
+                  />
+                  <span style={{ fontWeight: 600 }}>プロキシ動画を自動生成する</span>
+                </label>
+                <span style={{ fontSize: '0.7rem', color: '#64748b', display: 'block', marginTop: '4px' }}>
+                  通常はOFFのまま元動画で再生します（読み込んですぐ編集できます）。重い4K素材などで
+                  再生がカクつく場合だけONにしてください。生成には時間がかかり、生成中はPCが重くなります。
+                </span>
+              </div>
+
+              <div style={{ opacity: prefs.autoProxy ? 1 : 0.4, pointerEvents: prefs.autoProxy ? 'auto' : 'none' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '6px' }}>
                   <span>最大使用スレッド数 (CPU):</span>
                   <span style={{ fontWeight: 'bold', color: '#34d399' }}>{prefs.ffmpegThreads} スレッド</span>

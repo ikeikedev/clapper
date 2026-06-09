@@ -448,6 +448,11 @@ export function VideoPreview({
           onSyncStateChangeRef.current?.(false);
           // すべて準備できたので、再生中であれば全要素を一斉に play する
           if (playing) {
+            // 音声(Web Audio)の再生開始を、映像の準備完了＝この一斉再生タイミングに合わせる。
+            // こうしないと音声だけ先行し、ジャンプ/プレビュー直後に映像が出遅れて見える。
+            if (!audioEngine.playback.playing) {
+              audioEngine.playback.play(current);
+            }
             currentTracks.forEach(track => {
               const video = videoRefs.current[track.id];
               const audio = audioRefs.current[track.id];
@@ -575,9 +580,9 @@ export function VideoPreview({
                       video.playbackRate = 1.0;
                       lastPlaybackRates.current[track.id] = 1.0;
                     }
-                  } else if (videoDrift <= 0.5) {
-                    // 2) ズレが 20ms 〜 500ms: ソフト追従でなめらかに吸収（映像は無音なので速度変化は目立たない）。
-                    //    ゾーンを広げ・上限を上げて、ハードシーク(=一瞬のカクッ)をできるだけ起こさない。
+                  } else if (videoDrift <= 0.25) {
+                    // 2) ズレが 20ms 〜 250ms: ソフト追従でなめらかに吸収（映像は無音なので速度変化は目立たない）。
+                    //    kP/上限を強めにして素早く詰め、ズレが見える時間を短くする。
                     const diff = validTime - video.currentTime;
                     const kP = 0.25;
                     const rateAdjustment = Math.max(-0.05, Math.min(0.05, diff * kP));
@@ -589,8 +594,8 @@ export function VideoPreview({
                       lastPlaybackRates.current[track.id] = targetRate;
                     }
                   } else {
-                    // 3) ズレが 500ms 超（大きなストール等）: ハードシークで一気に修正（頻度は低い）
-                    if (timeSinceLastSeek > 800 && video.readyState >= 2) {
+                    // 3) ズレが 250ms 超: ハードシークで一気に修正
+                    if (timeSinceLastSeek > 500 && video.readyState >= 2) {
                       video.currentTime = validTime;
                       lastSeekTimes.current[track.id] = now;
                       video.playbackRate = 1.0;

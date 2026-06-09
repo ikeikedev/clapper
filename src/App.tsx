@@ -646,12 +646,11 @@ function App() {
   const currentTimeRef = useRef(currentTime);
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
 
-  // 【Web Audio 再生】isPlaying に追従してチャンク再生エンジンを駆動する。
-  // ここで唯一 play/pause を集中管理するので、setIsPlaying(false) するどの経路でも確実に止まる。
+  // 【Web Audio 再生】停止はここで集中管理する。
+  // 再生開始(play)は VideoPreview の協調リシンク側（全映像の準備が整った瞬間）が呼ぶ。
+  // 音声だけ先に走り出すと映像が出遅れて見えるため、映像の一斉再生に音声開始を合わせる。
   useEffect(() => {
-    if (isPlaying) {
-      audioEngine.playback.play(currentTimeRef.current);
-    } else {
+    if (!isPlaying) {
       audioEngine.playback.pause();
     }
   }, [isPlaying]);

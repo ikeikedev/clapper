@@ -1122,7 +1122,7 @@ export function Timeline({
                           style={{ fontSize: '0.65rem', color: '#fbbf24', background: 'rgba(251, 191, 36, 0.12)', border: '1px solid rgba(251, 191, 36, 0.3)', borderRadius: '3px', padding: '2px 4px', fontWeight: 'bold', flexShrink: 0 }}
                           title={`音声ディレイ: ${(track.audioOffsetSeconds * 1000).toFixed(0)}ms`}
                         >
-                          {track.audioOffsetSeconds > 0 ? '+' : ''}{(track.audioOffsetSeconds * 1000).toFixed(0)}ms
+                          {`${track.audioOffsetSeconds > 0 ? '+' : ''}${(track.audioOffsetSeconds * 1000).toFixed(0)}ms`}
                         </div>
                       ) : null}
                     </div>
@@ -1188,7 +1188,7 @@ export function Timeline({
                           }}
                           title={track.isLocked ? "ロックされています" : "ドラッグ: 微調整 / ダブルクリック: リセット"}
                         >
-                          {track.offsetSeconds > 0 ? '+' : ''}{track.offsetSeconds.toFixed(3)}s
+                          {`${track.offsetSeconds > 0 ? '+' : ''}${track.offsetSeconds.toFixed(3)}s`}
                         </span>
 
                         {onToggleLockTrack && (

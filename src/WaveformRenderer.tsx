@@ -138,7 +138,7 @@ export function WaveformRenderer({
           display: offsetSeconds === 0 ? 'none' : 'block'
         }}
       >
-        {offsetSeconds > 0 ? '+' : ''}{offsetSeconds.toFixed(3)}s
+        {`${offsetSeconds > 0 ? '+' : ''}${offsetSeconds.toFixed(3)}s`}
       </div>
     </div>
   );

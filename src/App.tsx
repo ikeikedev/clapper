@@ -1671,7 +1671,7 @@ function App() {
       const anySoloedLoaded = migratedTracks.some((t: any) => t.audioState?.isSoloed);
       migratedTracks.forEach((t: any) => {
         const total = (t.offsetSeconds || 0) + (t.audioOffsetSeconds || 0);
-        const audible = !t.audioState?.isMuted && (!anySoloedLoaded || t.audioState?.isSoloed);
+        const audible = !!t.audioState?.isSoloed || (!t.audioState?.isMuted && !anySoloedLoaded);
         invoke<{ path: string }>('extract_playback_audio', { videoPath: t.path })
           .then(pb => audioEngine.playback.loadTrack(t.id, pb.path, total, audible))
           .catch(e => console.error('再生用音声の抽出/読み込みに失敗:', e));

@@ -206,8 +206,9 @@ export function VideoPreview({
       // 音声はメディア要素ではなく Web Audio バッファ再生から供給する。
       audioEngine.ensureTrackChain(track.id);
       audioEngine.updateTrackState(track.id, track.audioState, anySoloed);
-      // 聞こえる(ミュートでない)トラックだけをスケジュール対象にする
-      const audible = !track.audioState.isMuted && (!anySoloed || track.audioState.isSoloed);
+      // 聞こえるトラックだけをスケジュール対象にする。ソロはミュートより優先:
+      // ソロ中 OR (ミュートでない AND 他にソロが無い)
+      const audible = track.audioState.isSoloed || (!track.audioState.isMuted && !anySoloed);
       audioEngine.playback.setTrackActive(track.id, audible);
     });
   }, [tracks, isGridView]);
@@ -454,6 +455,16 @@ export function VideoPreview({
               if (video && !track.isAudioOnly && !isNaN(video.duration)) {
                 const targetTime = current - track.offsetSeconds;
                 if (targetTime >= 0 && targetTime < video.duration) {
+                  // 音声は正確なクロックで既に current にいる。映像はバッファ待ちの間に
+                  // 音声クロックが進んだぶん遅れているので、最新 current へ貼り直してから再生する。
+                  // これをしないと後でクールダウン明けに大きなズレをハードシークで詰めてカクッとなる。
+                  const validTime = Math.max(0, targetTime);
+                  if (Math.abs(video.currentTime - validTime) > 0.04 && video.readyState >= 2) {
+                    video.currentTime = validTime;
+                  }
+                  video.playbackRate = 1.0;
+                  lastPlaybackRates.current[track.id] = 1.0;
+                  lastSeekTimes.current[track.id] = now;
                   safePlay(video, `${track.id}_video`);
                 }
               }

@@ -181,26 +181,27 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({ onClose, onS
                 </span>
               </div>
 
-              <div style={{ opacity: prefs.autoProxy ? 1 : 0.4, pointerEvents: prefs.autoProxy ? 'auto' : 'none' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '6px' }}>
-                  <span>最大使用スレッド数 (CPU):</span>
-                  <span style={{ fontWeight: 'bold', color: '#34d399' }}>{prefs.ffmpegThreads} スレッド</span>
+              <div style={{ opacity: prefs.autoProxy ? 1 : 0.4, pointerEvents: prefs.autoProxy ? 'auto' : 'none', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '6px' }}>
+                    <span>最大使用スレッド数 (CPU):</span>
+                    <span style={{ fontWeight: 'bold', color: '#34d399' }}>{prefs.ffmpegThreads} スレッド</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1" max="8" step="1"
+                    value={prefs.ffmpegThreads}
+                    onChange={e => setPrefs(prev => ({ ...prev, ffmpegThreads: Number(e.target.value) }))}
+                    style={{ width: '100%', cursor: 'pointer', accentColor: '#10b981' }}
+                  />
+                  <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                    スレッド数を増やすと高速化しますが、PC全体の負荷が高くなります。
+                  </span>
                 </div>
-                <input
-                  type="range"
-                  min="1" max="8" step="1"
-                  value={prefs.ffmpegThreads}
-                  onChange={e => setPrefs(prev => ({ ...prev, ffmpegThreads: Number(e.target.value) }))}
-                  style={{ width: '100%', cursor: 'pointer', accentColor: '#10b981' }}
-                />
-                <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                  スレッド数を増やすと高速化しますが、PC全体の負荷が高くなります。
-                </span>
-              </div>
 
-              <div style={{ display: 'flex', gap: '16px' }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '6px' }}>プロキシ解像度:</label>
+                <div style={{ display: 'flex', gap: '16px' }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: 'block', fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '6px' }}>プロキシ解像度:</label>
                   <select
                     value={prefs.proxyResolution}
                     onChange={e => setPrefs(prev => ({ ...prev, proxyResolution: e.target.value }))}
@@ -240,6 +241,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({ onClose, onS
                 </div>
               </div>
             </div>
+          </div>
           </div>
 
         </div>

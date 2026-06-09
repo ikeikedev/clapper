@@ -835,13 +835,12 @@ export function VideoPreview({
     return (
       <div 
         ref={containerRef}
-        style={{ 
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', 
+        style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
           height: '100%', color: '#94a3b8', fontSize: '1.1rem', background: '#05080f', borderRadius: '8px',
           position: 'relative'
         }}
       >
-        {renderLayoutToggle()}
         <div style={{ marginBottom: '16px' }}>
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 10v4" />

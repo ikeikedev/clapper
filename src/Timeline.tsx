@@ -4,12 +4,13 @@ import type { TrackData, CutPoint, ExportRange } from './types';
 
 export const TRACK_COLORS = ['#4fb38a', '#5e81ac', '#d08770', '#b48ead', '#ab8f75', '#8fbcbb'];
 
-export function getTrackColor(track: TrackData, allTracks: TrackData[]) {
+export function getTrackColor(track: TrackData, _allTracks: TrackData[]) {
   if (track.isRef) return TRACK_COLORS[0];
-  const nonRefTracks = allTracks.filter(t => !t.isRef);
-  const idx = nonRefTracks.findIndex(t => t.id === track.id);
-  const safeIdx = idx === -1 ? 0 : idx;
-  return TRACK_COLORS[1 + (safeIdx % (TRACK_COLORS.length - 1))];
+  if (track.color) return track.color;
+  // colorフィールドがない古いトラックはIDハッシュで安定した色を返す
+  let hash = 0;
+  for (let i = 0; i < track.id.length; i++) hash = (hash * 31 + track.id.charCodeAt(i)) | 0;
+  return TRACK_COLORS[1 + (Math.abs(hash) % (TRACK_COLORS.length - 1))];
 }
 
 export function formatTimecode(seconds: number, showSign = false): string {
@@ -120,6 +121,22 @@ export function Timeline({
   // トラックのドラッグ並べ替え用（カメラトラックのみ対象）
   const dragTrackIdRef = useRef<string | null>(null);
   const [dragOverTrackId, setDragOverTrackId] = React.useState<string | null>(null);
+  const [dragFromTrackId, setDragFromTrackId] = React.useState<string | null>(null);
+
+  // ドラッグ中のマウスY座標から、重なっているトラック行のIDを求める（無効ボタン等に邪魔されない）
+  const getReorderTargetAtY = (y: number): string | null => {
+    const rows = document.querySelectorAll<HTMLElement>('[data-track-id]');
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect();
+      if (y >= rect.top && y <= rect.bottom) {
+        const id = row.dataset.trackId ?? null;
+        const t = tracks.find(tk => tk.id === id);
+        if (t && !t.isRef) return id;
+        return null;
+      }
+    }
+    return null;
+  };
   const [editingTrackId, setEditingTrackId] = React.useState<string | null>(null);
   const [editingName, setEditingName] = React.useState('');
 
@@ -788,6 +805,30 @@ export function Timeline({
       className="timeline-outer-container"
       style={{ display: 'flex', overflow: 'hidden', position: 'relative', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', height: '100%', boxSizing: 'border-box' }}
     >
+      {/* トラック並べ替え用オーバーレイ: ドラッグ中だけ画面全体を覆い、無効ボタン等にマウスイベントを奪われないようにする */}
+      {dragFromTrackId && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, cursor: 'grabbing' }}
+          onMouseMove={(e) => {
+            const overId = getReorderTargetAtY(e.clientY);
+            setDragOverTrackId(overId && overId !== dragFromTrackId ? overId : null);
+          }}
+          onMouseUp={(e) => {
+            const targetId = getReorderTargetAtY(e.clientY);
+            if (targetId && targetId !== dragFromTrackId) {
+              onTrackReorder?.(dragFromTrackId, targetId);
+            }
+            dragTrackIdRef.current = null;
+            setDragOverTrackId(null);
+            setDragFromTrackId(null);
+          }}
+          onMouseLeave={() => {
+            dragTrackIdRef.current = null;
+            setDragOverTrackId(null);
+            setDragFromTrackId(null);
+          }}
+        />
+      )}
       {/* 1. Left Sidebar (Fixed 180px Wide Labels, Outside Scroll Container) */}
       <div
         ref={leftSidebarRef}
@@ -910,25 +951,16 @@ export function Timeline({
               const isPinnedRow = track.isRef && isRefPinned;
 
               const isDragOver = dragOverTrackId === track.id && !track.isRef;
+              const fromIdx = tracks.findIndex(t => t.id === dragFromTrackId);
+              const thisIdx = tracks.findIndex(t => t.id === track.id);
+              const showLineAtBottom = isDragOver && fromIdx < thisIdx;
+              const showLineAtTop = isDragOver && fromIdx > thisIdx;
 
               return (
                 <div
                   key={track.id}
+                  data-track-id={track.id}
                   className={`track-sidebar-row ${isPinnedRow ? 'pinned' : ''}`}
-                  onDragOver={(e) => {
-                    if (dragTrackIdRef.current && !track.isRef && dragTrackIdRef.current !== track.id) {
-                      e.preventDefault();
-                      if (dragOverTrackId !== track.id) setDragOverTrackId(track.id);
-                    }
-                  }}
-                  onDrop={(e) => {
-                    if (dragTrackIdRef.current && !track.isRef && dragTrackIdRef.current !== track.id) {
-                      e.preventDefault();
-                      onTrackReorder?.(dragTrackIdRef.current, track.id);
-                    }
-                    dragTrackIdRef.current = null;
-                    setDragOverTrackId(null);
-                  }}
                   style={{
                     display: 'flex',
                     alignItems: 'stretch',
@@ -937,8 +969,8 @@ export function Timeline({
                     top: isPinnedRow ? '52px' : 'auto',
                     zIndex: isPinnedRow ? 120 : 100,
                     backgroundColor: isPinnedRow ? '#1e293b' : '#111827',
-                    borderBottom: '1px solid rgba(255,255,255,0.05)',
-                    borderTop: isDragOver ? '2px solid #3b82f6' : '1px solid transparent',
+                    borderTop: showLineAtTop ? '2px solid #3b82f6' : '1px solid transparent',
+                    borderBottom: showLineAtBottom ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.05)',
                     boxShadow: isPinnedRow ? '0 4px 6px -1px rgba(0,0,0,0.3)' : 'none',
                     transition: 'background-color 0.2s',
                     boxSizing: 'border-box'
@@ -987,16 +1019,14 @@ export function Timeline({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', overflow: 'hidden' }}>
                       {!track.isRef && (
                         <span
-                          draggable
-                          onDragStart={(e) => {
-                            dragTrackIdRef.current = track.id;
-                            e.dataTransfer.effectAllowed = 'move';
-                            try { e.dataTransfer.setData('text/plain', track.id); } catch { /* noop */ }
-                          }}
-                          onDragEnd={() => { dragTrackIdRef.current = null; setDragOverTrackId(null); }}
                           onClick={(e) => e.stopPropagation()}
-                          onMouseDown={(e) => e.stopPropagation()}
                           onDoubleClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            dragTrackIdRef.current = track.id;
+                            setDragFromTrackId(track.id);
+                          }}
                           title="ドラッグでトラックを並べ替え"
                           style={{ flexShrink: 0, cursor: 'grab', color: '#64748b', display: 'flex', alignItems: 'center', lineHeight: 0 }}
                         >

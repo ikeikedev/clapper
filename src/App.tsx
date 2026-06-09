@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open, save, ask, message } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { documentDir, join } from '@tauri-apps/api/path';
-import { Timeline, getTrackColor, formatTimecode } from './Timeline';
+import { Timeline, getTrackColor, formatTimecode, TRACK_COLORS } from './Timeline';
 import { VideoPreview } from './VideoPreview';
 import { MixerModal } from './MixerModal';
 import { ExportModal } from './ExportModal';
@@ -819,7 +819,9 @@ function App() {
     };
     
     setTracks(prev => {
-      const next = [...prev, newTrack];
+      const nonRefCount = prev.filter(t => !t.isRef).length;
+      const color = isRef ? TRACK_COLORS[0] : TRACK_COLORS[1 + (nonRefCount % (TRACK_COLORS.length - 1))];
+      const next = [...prev, { ...newTrack, color }];
       pushHistory(next, cuts);
       return next;
     });
@@ -982,11 +984,13 @@ function App() {
   const handleTrackReorder = (draggedId: string, targetId: string) => {
     if (draggedId === targetId) return;
     const from = tracks.findIndex(t => t.id === draggedId);
-    if (from === -1 || !tracks.find(t => t.id === targetId)) return;
+    const toOrig = tracks.findIndex(t => t.id === targetId);
+    if (from === -1 || toOrig === -1) return;
     const next = [...tracks];
     const [moved] = next.splice(from, 1);
     const to = next.findIndex(t => t.id === targetId);
-    next.splice(to, 0, moved); // ドロップ先トラックの直前に挿入
+    // 下に移動する場合はドロップ先の後ろに、上に移動する場合は前に挿入
+    next.splice(toOrig > from ? to + 1 : to, 0, moved);
     setTracks(next);
     pushHistory(next, cuts);
     setStatusText('トラックの順序を変更しました');

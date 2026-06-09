@@ -59,6 +59,7 @@ export const DEFAULT_COLOR_STATE: ColorState = {
 export interface TrackData {
   id: string;
   name: string;
+  color?: string;
   path: string;
   wavPath: string;
   proxyPath?: string;

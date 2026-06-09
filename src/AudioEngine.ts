@@ -300,17 +300,17 @@ class AudioEngine {
     }
   }
 
-  getTrackMeterLevel(id: string): { l: number, r: number } {
+  getTrackMeterLevel(id: string, isMono = false): { l: number, r: number } {
     const nodes = this.trackNodes.get(id);
     const dataArrayL = this.trackDataArraysL.get(id);
     const dataArrayR = this.trackDataArraysR.get(id);
     if (!nodes || !dataArrayL || !dataArrayR) return { l: 0, r: 0 };
-    
+
     // getByteTimeDomainData returns waveform samples (0-255, center=128)
     // RMS of (sample - 128) gives true signal amplitude
     nodes.analyserL.getByteTimeDomainData(dataArrayL);
     nodes.analyserR.getByteTimeDomainData(dataArrayR);
-    
+
     let sumSqL = 0, sumSqR = 0;
     for (let i = 0; i < dataArrayL.length; i++) {
       const vL = (dataArrayL[i] - 128) / 128.0;
@@ -318,10 +318,11 @@ class AudioEngine {
       sumSqL += vL * vL;
       sumSqR += vR * vR;
     }
-    return {
-      l: Math.sqrt(sumSqL / dataArrayL.length),
-      r: Math.sqrt(sumSqR / dataArrayR.length)
-    };
+    const l = Math.sqrt(sumSqL / dataArrayL.length);
+    // モノ時は gain.channelCount=1 のため splitter の R チャンネルが無音になる
+    // その場合は L の値を R にも使う
+    const r = isMono ? l : Math.sqrt(sumSqR / dataArrayR.length);
+    return { l, r };
   }
 
   getTrackGRLevel(id: string): number {

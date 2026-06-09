@@ -730,7 +730,7 @@ export function MixerModal({ tracks, masterState, onUpdateAudioState, onUpdateMa
                 color={getTrackColor(track, tracks)}
                 state={track.audioState}
                 activeEffect={activeEffect?.trackId === track.id ? activeEffect.type : null}
-                getVULevel={() => audioEngine.getTrackMeterLevel(track.id)}
+                getVULevel={() => audioEngine.getTrackMeterLevel(track.id, track.audioState.isMono)}
                 onChange={s => onUpdateAudioState(track.id, s)}
                 onOpenEffect={type => setActiveEffect(prev => prev?.trackId === track.id && prev.type === type ? null : { trackId: track.id, type })}
                 showSolo={true}

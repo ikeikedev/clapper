@@ -2,20 +2,12 @@ import React, { useState, useEffect } from 'react';
 
 export interface AppPreferences {
   projectFps: 24 | 29.97 | 30 | 60;
-  autoProxy: boolean;
-  ffmpegThreads: number;
-  proxyResolution: string;
-  proxyCrf: number;
   defaultTransitionType: 'cut' | 'crossfade';
   defaultTransitionDuration: number;
 }
 
 export const DEFAULT_PREFERENCES: AppPreferences = {
   projectFps: 60,
-  autoProxy: false,
-  ffmpegThreads: 2,
-  proxyResolution: "scale=-2:720",
-  proxyCrf: 26,
   defaultTransitionType: 'cut',
   defaultTransitionDuration: 0.5,
 };
@@ -157,92 +149,6 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({ onClose, onS
             </div>
           </div>
 
-          {/* Section: Proxy Render Settings */}
-          <div>
-            <h3 style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: '#10b981', borderBottom: '1px solid #1e293b', paddingBottom: '4px', fontWeight: 600 }}>
-              プロキシ動画生成 (FFmpeg)
-            </h3>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              {/* プロキシ自動生成 ON/OFF（既定OFF） */}
-              <div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: '#cbd5e1', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={prefs.autoProxy}
-                    onChange={e => setPrefs(prev => ({ ...prev, autoProxy: e.target.checked }))}
-                    style={{ width: '16px', height: '16px', accentColor: '#10b981', cursor: 'pointer' }}
-                  />
-                  <span style={{ fontWeight: 600 }}>プロキシ動画を自動生成する</span>
-                </label>
-                <span style={{ fontSize: '0.7rem', color: '#64748b', display: 'block', marginTop: '4px' }}>
-                  通常はOFFのまま元動画で再生します（読み込んですぐ編集できます）。重い4K素材などで
-                  再生がカクつく場合だけONにしてください。生成には時間がかかり、生成中はPCが重くなります。
-                </span>
-              </div>
-
-              <div style={{ opacity: prefs.autoProxy ? 1 : 0.4, pointerEvents: prefs.autoProxy ? 'auto' : 'none', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '6px' }}>
-                    <span>最大使用スレッド数 (CPU):</span>
-                    <span style={{ fontWeight: 'bold', color: '#34d399' }}>{prefs.ffmpegThreads} スレッド</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1" max="8" step="1"
-                    value={prefs.ffmpegThreads}
-                    onChange={e => setPrefs(prev => ({ ...prev, ffmpegThreads: Number(e.target.value) }))}
-                    style={{ width: '100%', cursor: 'pointer', accentColor: '#10b981' }}
-                  />
-                  <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                    スレッド数を増やすと高速化しますが、PC全体の負荷が高くなります。
-                  </span>
-                </div>
-
-                <div style={{ display: 'flex', gap: '16px' }}>
-                  <div style={{ flex: 1 }}>
-                    <label style={{ display: 'block', fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '6px' }}>プロキシ解像度:</label>
-                  <select
-                    value={prefs.proxyResolution}
-                    onChange={e => setPrefs(prev => ({ ...prev, proxyResolution: e.target.value }))}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      background: '#1f2937',
-                      border: '1px solid #374151',
-                      borderRadius: '6px',
-                      color: '#e2e8f0',
-                      outline: 'none',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <option value="scale=-2:360">360p (低負荷/最速)</option>
-                    <option value="scale=-2:480">480p (バランス)</option>
-                    <option value="scale=-2:720">720p (高画質/標準)</option>
-                  </select>
-                </div>
-
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '6px' }}>
-                    <span>画質 (CRF):</span>
-                    <span style={{ fontWeight: 'bold', color: '#34d399' }}>{prefs.proxyCrf}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="18" max="32" step="1"
-                    value={prefs.proxyCrf}
-                    onChange={e => setPrefs(prev => ({ ...prev, proxyCrf: Number(e.target.value) }))}
-                    style={{ width: '100%', cursor: 'pointer', accentColor: '#10b981' }}
-                  />
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: '#64748b', marginTop: '2px' }}>
-                    <span>高画質 (18)</span>
-                    <span>低画質 (32)</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          </div>
 
         </div>
 

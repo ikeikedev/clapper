@@ -61,7 +61,6 @@ export interface TrackData {
   color?: string;
   path: string;
   wavPath: string;
-  proxyPath?: string;
   peaks: number[];
   offsetSeconds: number;
   isRef: boolean;

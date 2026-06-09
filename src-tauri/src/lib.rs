@@ -486,151 +486,6 @@ fn extract_envelope_impl(wav_path: &str, target_sample_rate: u32) -> Result<(Vec
     Ok((envelope, actual_target_sr))
 }
 
-// ─────────────────────────────────────────────
-// プロキシ動画の生成
-// ─────────────────────────────────────────────
-#[tauri::command]
-async fn generate_proxy_video(
-    app_handle: tauri::AppHandle, 
-    video_path: String,
-    threads: Option<u32>,
-    crf: Option<u32>,
-    resolution: Option<String>,
-) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let (_, proxy_path) = get_temp_paths(&app_handle, &video_path);
-        let proxy_path_str = proxy_path.to_string_lossy().to_string();
-        let tmp_proxy_path = proxy_path.with_extension("proxy.mp4.tmp");
-        let tmp_proxy_path_str = tmp_proxy_path.to_string_lossy().to_string();
-
-        // 既にプロキシ動画が生成されていれば再利用する（爆速キャッシュ）
-        if proxy_path.exists() && proxy_path.metadata().map(|m| m.len()).unwrap_or(0) > 1000 {
-            let _ = tauri::Emitter::emit(&app_handle, "proxy-progress", 100);
-            return Ok(proxy_path_str);
-        }
-
-        use std::io::{BufRead, BufReader};
-        use std::process::Stdio;
-
-        let ffmpeg = find_ffmpeg(&app_handle);
-        let total_duration = get_media_duration(&ffmpeg, &video_path).unwrap_or(0.0);
-
-        let threads_str = threads.unwrap_or(0).to_string(); // 0 = 全コア（libx264フォールバック時）
-        let crf_str = crf.unwrap_or(26).to_string();
-        let res_val = resolution.unwrap_or_else(|| "scale=-2:720".to_string());
-        let vf_arg = if res_val.starts_with("scale=") { res_val } else { format!("scale={}", res_val) };
-
-        // 利用可能なら GPU エンコーダ(NVENC/QSV/AMF)を使う。プロキシは画質を問わないので最速設定。
-        let encoder = best_video_encoder(&ffmpeg);
-
-        // スレッド数の上限は撤廃（プロキシは全コアを使って最速で作る）。threads 引数は無視する。
-        let _ = (&threads, &threads_str);
-
-        // デコードも可能ならハードウェア支援（CPUスケールへ自動ダウンロード）
-        let mut ffmpeg_args: Vec<String> = vec![
-            "-y".to_string(),
-            "-loglevel".to_string(), "error".to_string(),
-            "-hwaccel".to_string(), "auto".to_string(),
-            "-i".to_string(), video_path.clone(),
-            // プロキシは映像表示専用（音声は別の再生エンジン、表示ビデオもミュート）なので
-            // 音声は一切エンコードしない。AACエンコードを丸ごと省けて速い。
-            "-an".to_string(),
-            "-vf".to_string(), vf_arg,
-        ];
-
-        // エンコーダ別の最速設定。GPU(NVENC/QSV/AMF)が有れば使い、無ければ libx264 ultrafast(全コア)。
-        let venc: Vec<String> = match encoder.as_str() {
-            "h264_nvenc" => vec![
-                "-c:v".into(), "h264_nvenc".into(),
-                "-preset".into(), "p1".into(),        // p1 = 最速
-                "-rc".into(), "constqp".into(), "-qp".into(), "30".into(),
-            ],
-            "h264_qsv" => vec![
-                "-c:v".into(), "h264_qsv".into(),
-                "-preset".into(), "veryfast".into(),
-                "-global_quality".into(), "30".into(),
-            ],
-            "h264_amf" => vec![
-                "-c:v".into(), "h264_amf".into(),
-                "-quality".into(), "speed".into(),
-                "-rc".into(), "cqp".into(), "-qp_i".into(), "30".into(), "-qp_p".into(), "30".into(),
-            ],
-            _ => vec![
-                "-c:v".into(), "libx264".into(),
-                "-preset".into(), "ultrafast".into(),
-                "-crf".into(), crf_str,
-                // -threads は付けない → libx264 が全コアを自動利用（スレッド制限撤廃）
-            ],
-        };
-        ffmpeg_args.extend(venc);
-
-        ffmpeg_args.extend([
-            // 出力先が .tmp 拡張子なので、FFmpeg が拡張子からフォーマットを判定できない。
-            // -f mp4 を明示しないと "Unable to find a suitable output format" で失敗する。
-            "-f".to_string(), "mp4".to_string(),
-            "-progress".to_string(), "pipe:1".to_string(),
-            tmp_proxy_path_str.clone()
-        ]);
-
-        let mut child = new_command(&ffmpeg)
-            .args(&ffmpeg_args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("FFmpeg実行失敗: {}", e))?;
-
-        // stderr は別スレッドで吸い出しておく（パイプが詰まってデッドロックしないように）
-        let stderr = child.stderr.take().unwrap();
-        let stderr_handle = std::thread::spawn(move || {
-            use std::io::Read;
-            let mut s = String::new();
-            let mut r = stderr;
-            let _ = r.read_to_string(&mut s);
-            s
-        });
-
-        let stdout = child.stdout.take().unwrap();
-        let reader = BufReader::new(stdout);
-
-        for line in reader.lines() {
-            let line = line.unwrap_or_default();
-            if line.starts_with("out_time_us=") {
-                if let Ok(us) = line.trim_start_matches("out_time_us=").parse::<f64>() {
-                    let current_secs = us / 1_000_000.0;
-                    if total_duration > 0.0 {
-                        let pct = (current_secs / total_duration * 100.0).min(99.0);
-                        // proxy-progress イベントを発火
-                        let _ = tauri::Emitter::emit(&app_handle, "proxy-progress", pct as i32);
-                    }
-                }
-            }
-        }
-
-        let status = child.wait().map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_proxy_path);
-            format!("FFmpeg wait error: {}", e)
-        })?;
-        let stderr_text = stderr_handle.join().unwrap_or_default();
-        if !status.success() {
-            let _ = std::fs::remove_file(&tmp_proxy_path);
-            // FFmpeg の実エラー（stderr 末尾）を含めて返す（原因特定用）
-            let tail: String = stderr_text.lines().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
-            eprintln!("[proxy] FFmpeg failed for {}:\n{}", video_path, stderr_text);
-            return Err(format!("プロキシ動画の生成に失敗しました:\n{}", tail));
-        }
-
-        // 成功時のみ一時ファイルを正式パスへリネーム
-        std::fs::rename(&tmp_proxy_path, &proxy_path).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_proxy_path);
-            format!("プロキシファイルの保存に失敗しました: {}", e)
-        })?;
-
-        let _ = tauri::Emitter::emit(&app_handle, "proxy-progress", 100);
-        Ok(proxy_path_str)
-    })
-    .await
-    .map_err(|e| format!("タスクの実行に失敗しました: {}", e))?
-}
 
 // ─────────────────────────────────────────────
 // 自動同期オフセット計算（FFT相互相関）
@@ -872,13 +727,6 @@ fn build_comp_filter(c: &CompPayload) -> String {
     let atk = (c.attack * 1000.0).clamp(0.01, 2000.0);
     let rel = (c.release * 1000.0).clamp(0.01, 9000.0);
     format!("acompressor=threshold={:.6}:ratio={:.2}:attack={:.2}:release={:.2}", thr_lin, ratio, atk, rel)
-}
-
-// 検出結果をキャッシュ（毎回テストエンコードすると遅いため、プロキシ/書き出しで共有）
-fn best_video_encoder(ffmpeg: &str) -> String {
-    use std::sync::OnceLock;
-    static CACHE: OnceLock<String> = OnceLock::new();
-    CACHE.get_or_init(|| detect_best_encoder(ffmpeg)).clone()
 }
 
 fn detect_best_encoder(ffmpeg: &str) -> String {
@@ -1757,9 +1605,8 @@ pub fn run() {
       extract_playback_audio,
       read_pcm_range,
       generate_waveform,
-      calculate_sync_offset, 
-      export_video, 
-      generate_proxy_video,
+      calculate_sync_offset,
+      export_video,
       save_project_file,
       load_project_file,
       check_missing_files,

@@ -976,8 +976,7 @@ export function VideoPreview({
         const isPrevious = track.id === previousCameraId;
         const isMainView = isActive || isPrevious;
         
-        const rawPath = track.proxyPath || track.path;
-        const url = convertFileSrc(rawPath.replace(/\\/g, '/'));
+        const url = convertFileSrc(track.path.replace(/\\/g, '/'));
         
         // Define fixed video layout size
         const V_WIDTH = 1280;

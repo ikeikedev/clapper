@@ -696,17 +696,6 @@ function App() {
 
   const [isGridView, setIsGridView] = useState(false);
 
-  // ─────────────────────────────────────
-  // プロキシ進捗リスナー設定
-  // ─────────────────────────────────────
-  useEffect(() => {
-    const unlisten = listen<number>('proxy-progress', (event) => {
-      setStatusText(`プロキシ動画生成中... ${event.payload}%`);
-    });
-    return () => {
-      unlisten.then(f => f());
-    };
-  }, []);
 
   const preferencesRef = useRef<AppPreferences>(preferences);
   useEffect(() => { preferencesRef.current = preferences; }, [preferences]);
@@ -752,30 +741,11 @@ function App() {
       pointsPerSecond: 50
     });
 
-    // 3. プロキシ動画の生成 (非同期実行 - 音声のみでない場合のみ)
-    // 既定では生成しない（長尺の全体トランスコードは時間がかかり、生成中もアプリが重くなるため）。
-    // 元動画で直接再生し、重い4K素材などで必要なユーザーだけ環境設定でONにする。
-    if (!isAudioOnly && preferencesRef.current.autoProxy) {
-      invoke<string>('generate_proxy_video', {
-        videoPath: selected,
-        threads: preferencesRef.current.ffmpegThreads,
-        crf: preferencesRef.current.proxyCrf,
-        resolution: preferencesRef.current.proxyResolution
-      }).then((proxyPath) => {
-        setTracks(prev => prev.map(t => t.id === id ? { ...t, proxyPath } : t));
-        setStatusText(`プロキシ動画生成完了: ${name}`);
-      }).catch(e => {
-        console.error("Proxy generation failed:", e);
-        setStatusText(`プロキシ動画の生成に失敗しました: ${name}`);
-      });
-    }
-
     const newTrack = {
       id,
       name,
       path: selected,
       wavPath: extractedPath,
-      proxyPath: undefined,
       peaks,
       offsetSeconds: 0,
       isRef,
@@ -794,8 +764,7 @@ function App() {
     });
     setStatusText(`追加完了: ${name}`);
 
-    // 【フェーズ3a】再生エンジン用にフル品質PCMを抽出して登録する（DAW式チャンク再生のデータ供給）。
-    // この時点ではまだ再生経路は切り替えていない（挙動は従来どおりメディア要素再生）。
+    // 再生エンジン用にフル品質PCMを抽出して登録する（DAW式チャンク再生のデータ供給）。
     invoke<{ path: string; durationSeconds: number }>('extract_playback_audio', { videoPath: selected })
       .then(pb => audioEngine.playback.loadTrack(id, pb.path, 0, isRef))
       .then(() => console.log(`[playback] loaded PCM for ${name}`))
@@ -1695,24 +1664,6 @@ function App() {
       markClean();
       addRecentProject(path);
       setStatusText(`プロジェクトを読み込みました: ${path.split(/[\\/]/).pop()}`);
-
-      // プロキシ再生に必要なプロセスを確認（環境設定でONのときのみ）
-      for (const track of (preferencesRef.current.autoProxy ? projectData.tracks : [])) {
-        if (!track.proxyPath && !track.isAudioOnly) {
-          setStatusText(`プロキシ動画を再生成中: ${track.name}`);
-          invoke<string>('generate_proxy_video', {
-            videoPath: track.path,
-            threads: preferencesRef.current.ffmpegThreads,
-            crf: preferencesRef.current.proxyCrf,
-            resolution: preferencesRef.current.proxyResolution
-          }).then((proxyPath) => {
-            setTracks(prev => prev.map(t => t.id === track.id ? { ...t, proxyPath } : t));
-          }).catch(e => {
-            console.error("Proxy generation failed on load:", e);
-            setStatusText(`プロキシ動画の再生成に失敗しました: ${track.name}`);
-          });
-        }
-      }
       return 'loaded';
     } catch (err) {
       console.error(err);

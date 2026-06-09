@@ -46,9 +46,6 @@ if (typeof window !== 'undefined' && !isTauri) {
       if (cmd === 'calculate_sync_offset') {
         return 0.123;
       }
-      if (cmd === 'generate_proxy_video') {
-        return args.videoPath.replace(/\.[^.]+$/, '') + '_proxy.mp4';
-      }
       if (cmd === 'save_project_file' || cmd === 'load_project_file') {
         return '{}';
       }

@@ -202,14 +202,13 @@ export function VideoPreview({
     const anySoloed = tracks.some(t => t.audioState.isSoloed);
 
     tracks.forEach(track => {
-      const audio = audioRefs.current[track.id];
-      if (!audio) return;
-      
-      audioEngine.connectVideo(track.id, audio);
+      // チャンク再生エンジン用に処理チェーン(comp→EQ→…→master)を用意する。
+      // 音声はメディア要素ではなく Web Audio バッファ再生から供給する。
+      audioEngine.ensureTrackChain(track.id);
       audioEngine.updateTrackState(track.id, track.audioState, anySoloed);
-      
-      // Web Audio API を通すため、ネイティブのミュートは常に解除
-      audio.muted = false;
+      // 聞こえる(ミュートでない)トラックだけをスケジュール対象にする
+      const audible = !track.audioState.isMuted && (!anySoloed || track.audioState.isSoloed);
+      audioEngine.playback.setTrackActive(track.id, audible);
     });
   }, [tracks, isGridView]);
 
@@ -813,25 +812,9 @@ export function VideoPreview({
     );
   };
 
-  const renderHiddenAudioPlayers = () => {
-    return (
-      <div style={{ display: 'none' }} id="hidden-audio-players">
-        {tracks.map(track => {
-          const rawPath = track.proxyPath || track.path;
-          const url = convertFileSrc(rawPath.replace(/\\/g, '/'));
-          return (
-            <video
-              key={`audio_${track.id}`}
-              ref={el => { audioRefs.current[track.id] = el; }}
-              src={url}
-              crossOrigin="anonymous"
-              playsInline
-            />
-          );
-        })}
-      </div>
-    );
-  };
+  // 音声はメディア要素ではなく Web Audio チャンク再生エンジンから供給するため、
+  // 隠し音声プレイヤーは廃止（audioRefs は空のままになり、同期ループの音声分岐は no-op になる）。
+  const renderHiddenAudioPlayers = () => null;
 
   const videoTracks = tracks.filter(t => !t.isAudioOnly);
 

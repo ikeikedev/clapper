@@ -122,33 +122,16 @@ function App() {
       isSeekingRef.current = false;
     }, 400);
 
-    let targetTime = 0;
+    // Web Audio チャンク再生エンジンへシークを通知（再生中なら即座に組み直し、停止中なら次回再生位置を更新）
     if (typeof time === 'function') {
       setCurrentTime(prev => {
-        targetTime = time(prev);
-        if (isPlayingRef.current) {
-          const refTrack = tracks.find(t => t.isRef);
-          if (refTrack) {
-            const refAudio = audioEngine.videoElements.get(refTrack.id);
-            if (refAudio) {
-              refAudio.currentTime = Math.max(0, targetTime - refTrack.offsetSeconds);
-            }
-          }
-        }
+        const targetTime = time(prev);
+        audioEngine.playback.seek(targetTime);
         return targetTime;
       });
     } else {
-      targetTime = time;
-      setCurrentTime(targetTime);
-      if (isPlayingRef.current) {
-        const refTrack = tracks.find(t => t.isRef);
-        if (refTrack) {
-          const refAudio = audioEngine.videoElements.get(refTrack.id);
-          if (refAudio) {
-            refAudio.currentTime = Math.max(0, targetTime - refTrack.offsetSeconds);
-          }
-        }
-      }
+      setCurrentTime(time);
+      audioEngine.playback.seek(time);
     }
   };
 
@@ -663,6 +646,16 @@ function App() {
   const currentTimeRef = useRef(currentTime);
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
 
+  // 【Web Audio 再生】isPlaying に追従してチャンク再生エンジンを駆動する。
+  // ここで唯一 play/pause を集中管理するので、setIsPlaying(false) するどの経路でも確実に止まる。
+  useEffect(() => {
+    if (isPlaying) {
+      audioEngine.playback.play(currentTimeRef.current);
+    } else {
+      audioEngine.playback.pause();
+    }
+  }, [isPlaying]);
+
   const shouldAutoStopRef = useRef(false);
   useEffect(() => {
     if (isPlaying) {
@@ -677,50 +670,22 @@ function App() {
     let animationFrame: number;
     lastTimeRef.current = performance.now();
     
-    const loop = (time: number) => {
-      const dt = (time - lastTimeRef.current) / 1000;
-      lastTimeRef.current = time;
-      
+    const loop = () => {
       if (isPlayingRef.current) {
-        const refTrack = tracksRef.current.find(t => t.isRef);
-        const refAudio = refTrack ? audioEngine.videoElements.get(refTrack.id) : null;
-        const isAudioSeeking = (refAudio && (refAudio.seeking || isSeekingRef.current)) || isVideoSyncingRef.current;
-
-        // シーク中または同期待ち中の間は、再生時間（currentTime）を進めずに待機する
-        if (isAudioSeeking) {
-          animationFrame = requestAnimationFrame(loop);
-          return;
-        }
-
-        if (refTrack && refAudio && !isNaN(refAudio.duration) && refAudio.currentTime < refAudio.duration - 0.05) {
-          const actualTime = refAudio.currentTime + refTrack.offsetSeconds;
-          setCurrentTime(() => {
-            const range = exportRangeRef.current;
-            if (shouldAutoStopRef.current && actualTime >= range.end) {
-              setIsPlaying(false);
-              return range.end;
-            }
-            if (actualTime >= duration) {
-              setIsPlaying(false);
-              return duration;
-            }
-            return actualTime;
-          });
-        } else {
-          setCurrentTime(prev => {
-            const nextTime = prev + dt;
-            const range = exportRangeRef.current;
-            if (shouldAutoStopRef.current && nextTime >= range.end) {
-              setIsPlaying(false);
-              return range.end;
-            }
-            if (nextTime >= duration) {
-              setIsPlaying(false);
-              return duration;
-            }
-            return nextTime;
-          });
-        }
+        // 再生位置は Web Audio チャンク再生エンジンのクロック（サンプル精度）を正とする
+        const head = audioEngine.playback.getPlayheadTime();
+        setCurrentTime(() => {
+          const range = exportRangeRef.current;
+          if (shouldAutoStopRef.current && head >= range.end) {
+            setIsPlaying(false);
+            return range.end;
+          }
+          if (head >= duration) {
+            setIsPlaying(false);
+            return duration;
+          }
+          return head;
+        });
       }
       animationFrame = requestAnimationFrame(loop);
     };
@@ -989,6 +954,9 @@ function App() {
       if (!ok) return;
     }
     setIsPlaying(false);
+    // 再生エンジンから登録解除（残すと再生時にスケジュールされ続ける）
+    audioEngine.playback.removeTrack(trackId);
+    audioEngine.removeTrack(trackId);
     const nextCuts = cuts.filter(c => c.cameraId !== trackId);
     setTracks(nextTracks);
     const cleaned = setCleanCuts(nextCuts, nextTracks);
@@ -1040,12 +1008,14 @@ function App() {
       const roundedOffset = Math.round(offset * 1000) / 1000;
       
       setTracks(prev => {
-        const next = prev.map(t => 
+        const next = prev.map(t =>
           t.id === trackId ? { ...t, offsetSeconds: roundedOffset, lastAutoSyncedOffset: roundedOffset } : t
         );
         pushHistory(next, cuts);
         return next;
       });
+      // 再生エンジンへ通知（= offset + 音声ディレイ）
+      audioEngine.playback.setTrackOffset(trackId, roundedOffset + (targetTrack.audioOffsetSeconds || 0));
       setStatusText(`${targetTrack.name} の同期完了 (ズレ: ${roundedOffset > 0 ? '+' : ''}${roundedOffset.toFixed(3)}s)`);
     } catch (err) {
       console.error(err);
@@ -1098,6 +1068,8 @@ function App() {
           const res = results.find(r => r.id === t.id);
           if (res && res.success) {
             successCount++;
+            // 再生エンジンへ通知（= offset + 音声ディレイ）
+            audioEngine.playback.setTrackOffset(t.id, res.offset + (t.audioOffsetSeconds || 0));
             return { ...t, offsetSeconds: res.offset, lastAutoSyncedOffset: res.offset };
           } else if (res) {
             failCount++;
@@ -1107,7 +1079,7 @@ function App() {
         pushHistory(next, cuts);
         return next;
       });
-      
+
       setStatusText(`一括同期完了: 成功 ${successCount}件, 失敗 ${failCount}件`);
     } catch (err) {
       console.error(err);
@@ -1122,6 +1094,8 @@ function App() {
     if (targetTrack?.isLocked) return;
     const roundedOffset = Math.round(newOffset * 1000) / 1000;
     setIsDraggingOffset(!commit);
+    // 再生エンジンへトラックのコンテンツオフセットを通知（= offset + 音声ディレイ）
+    audioEngine.playback.setTrackOffset(trackId, roundedOffset + (targetTrack?.audioOffsetSeconds || 0));
     setTracks(prev => {
       const next = prev.map(t => {
         if (t.id === trackId) {
@@ -1206,6 +1180,8 @@ function App() {
     if (targetTrack?.isLocked) return;
     const roundedOffset = Math.round(newAudioOffset * 1000) / 1000;
     setIsDraggingOffset(!commit);
+    // 再生エンジンへトラックのコンテンツオフセットを通知（= offset + 音声ディレイ）
+    audioEngine.playback.setTrackOffset(trackId, (targetTrack?.offsetSeconds || 0) + roundedOffset);
     setTracks(prev => {
       const next = prev.map(t => {
         if (t.id === trackId) {
@@ -1568,6 +1544,7 @@ function App() {
       if (!proceed) return;
     }
     setIsPlaying(false);
+    audioEngine.playback.reset();
     setTracks([]);
     setCuts([]);
     setCurrentTime(0);
@@ -1685,8 +1662,20 @@ function App() {
           compEnabled: t.audioState?.compEnabled ?? false,
         }
       }));
+      // 旧プロジェクトの登録を解除してから読み込む
+      audioEngine.playback.reset();
       setTracks(migratedTracks);
       const cleaned = setCleanCuts(projectData.cuts, migratedTracks);
+
+      // 再生エンジン用に各トラックの再生用PCMを抽出・登録する（チャンク再生のデータ供給）
+      const anySoloedLoaded = migratedTracks.some((t: any) => t.audioState?.isSoloed);
+      migratedTracks.forEach((t: any) => {
+        const total = (t.offsetSeconds || 0) + (t.audioOffsetSeconds || 0);
+        const audible = !t.audioState?.isMuted && (!anySoloedLoaded || t.audioState?.isSoloed);
+        invoke<{ path: string }>('extract_playback_audio', { videoPath: t.path })
+          .then(pb => audioEngine.playback.loadTrack(t.id, pb.path, total, audible))
+          .catch(e => console.error('再生用音声の抽出/読み込みに失敗:', e));
+      });
       // 古いプロジェクトファイルでフェード項目が欠けていても既定値で補完する
       const loadedRange: ExportRange = { ...DEFAULT_EXPORT_RANGE, ...(projectData.exportRange || {}) };
       setExportRange(loadedRange);
@@ -1835,15 +1824,8 @@ function App() {
       console.error("Failed to resume AudioEngine:", e);
     }
     setPreviewOverrideCameraId(null);
-
-    // 再生開始前に REF 要素(クロック)だけ先に頭出ししておく。
-    // スレーブ音声まで先行シークすると、協調リシンクの再シークと競合してプツプツになるため REF のみ。
-    const refTrack = tracks.find(t => t.isRef);
-    const refAudio = refTrack ? audioEngine.videoElements.get(refTrack.id) : null;
-    if (refTrack && refAudio) {
-      try { refAudio.currentTime = Math.max(0, time - refTrack.offsetSeconds); } catch { /* noop */ }
-    }
-
+    // 頭出し（playback.seek）→ 再生開始（isPlaying→true で playback.play(currentTime)）。
+    // チャンク再生はサンプル精度で位置決めされるので、停止状態からでもクリーンに頭出しできる。
     handleTimeChange(time);
     setIsPlaying(true);
   };

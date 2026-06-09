@@ -138,6 +138,14 @@ export class PlaybackEngine {
     if (t) { this.stopTrackChunks(t); this.tracks.delete(id); }
   }
 
+  // 全トラックを解除して停止する（新規プロジェクト/プロジェクト読込前のクリア用）
+  reset() {
+    this.pause();
+    for (const t of this.tracks.values()) this.stopTrackChunks(t);
+    this.tracks.clear();
+    this.pausedMediaTime = 0;
+  }
+
   setTrackOffset(id: string, totalOffsetSec: number) {
     const t = this.tracks.get(id);
     if (!t || t.totalOffsetSec === totalOffsetSec) return;

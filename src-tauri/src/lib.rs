@@ -95,6 +95,30 @@ fn get_temp_paths(app_handle: &tauri::AppHandle, video_path: &str) -> (std::path
     (temp_dir.join(wav_name), temp_dir.join(proxy_name))
 }
 
+// 再生用フル品質 PCM(WAV) のパスを解決する（チャンク再生エンジンが任意バイト範囲を読む用）
+fn get_playback_audio_path(app_handle: &tauri::AppHandle, video_path: &str) -> std::path::PathBuf {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    video_path.hash(&mut hasher);
+    let hash_val = hasher.finish();
+    let temp_dir = app_handle
+        .path()
+        .app_cache_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("multicam_sync_editor");
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let file_stem = Path::new(video_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("audio");
+    temp_dir.join(format!("{}_{:x}.playback.wav", file_stem, hash_val))
+}
+
+// 再生エンジン用に使うPCMフォーマット定数（フロントの AudioContext と一致させること）
+pub const PLAYBACK_SAMPLE_RATE: u32 = 48000;
+pub const PLAYBACK_CHANNELS: u16 = 2;
+
 // ─────────────────────────────────────────────
 // 音声抽出
 // ─────────────────────────────────────────────
@@ -128,6 +152,97 @@ async fn extract_audio(app_handle: tauri::AppHandle, video_path: String) -> Resu
         } else {
             Err(String::from_utf8_lossy(&output.stderr).to_string())
         }
+    })
+    .await
+    .map_err(|e| format!("タスクの実行に失敗しました: {}", e))?
+}
+
+// ─────────────────────────────────────────────
+// 再生用フル品質 PCM(WAV) 抽出（チャンク再生エンジン用）
+// 48kHz / ステレオ / s16le。任意バイト範囲を読んで AudioBuffer に詰める前提なので
+// 非圧縮 PCM(WAV) を採用（チャンク復号不要・シーク自由）。結果はキャッシュする。
+// 返り値: { path, sampleRate, channels, durationSeconds }
+// ─────────────────────────────────────────────
+#[derive(serde::Serialize)]
+pub struct PlaybackAudioInfo {
+    pub path: String,
+    #[serde(rename = "sampleRate")]
+    pub sample_rate: u32,
+    pub channels: u16,
+    #[serde(rename = "durationSeconds")]
+    pub duration_seconds: f64,
+}
+
+#[tauri::command]
+async fn extract_playback_audio(app_handle: tauri::AppHandle, video_path: String) -> Result<PlaybackAudioInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let out_path = get_playback_audio_path(&app_handle, &video_path);
+        let out_str = out_path.to_string_lossy().to_string();
+
+        // ヘッダを除いた PCM 1秒あたりのバイト数（再生位置→バイトオフセット換算用）
+        let bytes_per_second = PLAYBACK_SAMPLE_RATE as u64 * PLAYBACK_CHANNELS as u64 * 2;
+
+        // キャッシュ再利用
+        if out_path.exists() {
+            if let Ok(meta) = out_path.metadata() {
+                if meta.len() > 44 {
+                    let data_len = meta.len().saturating_sub(44);
+                    let dur = data_len as f64 / bytes_per_second as f64;
+                    return Ok(PlaybackAudioInfo {
+                        path: out_str,
+                        sample_rate: PLAYBACK_SAMPLE_RATE,
+                        channels: PLAYBACK_CHANNELS,
+                        duration_seconds: dur,
+                    });
+                }
+            }
+        }
+
+        let ffmpeg = find_ffmpeg(&app_handle);
+        let output = new_command(&ffmpeg)
+            .args([
+                "-y",
+                "-i", &video_path,
+                "-vn",
+                "-acodec", "pcm_s16le",
+                "-ar", &PLAYBACK_SAMPLE_RATE.to_string(),
+                "-ac", &PLAYBACK_CHANNELS.to_string(),
+                &out_str,
+            ])
+            .output()
+            .map_err(|e| format!("FFmpegの実行に失敗しました: {}", e))?;
+
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
+
+        let data_len = out_path.metadata().map(|m| m.len()).unwrap_or(0).saturating_sub(44);
+        let dur = data_len as f64 / bytes_per_second as f64;
+        Ok(PlaybackAudioInfo {
+            path: out_str,
+            sample_rate: PLAYBACK_SAMPLE_RATE,
+            channels: PLAYBACK_CHANNELS,
+            duration_seconds: dur,
+        })
+    })
+    .await
+    .map_err(|e| format!("タスクの実行に失敗しました: {}", e))?
+}
+
+// ─────────────────────────────────────────────
+// PCM の任意バイト範囲読み出し（チャンク再生エンジン用）
+// 生バイトを ArrayBuffer として返す（Vec<u8> を JSON 配列化すると激遅なので ipc::Response を使う）
+// ─────────────────────────────────────────────
+#[tauri::command]
+async fn read_pcm_range(path: String, offset: u64, length: u64) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = std::fs::File::open(&path).map_err(|e| format!("PCMファイルを開けません: {}", e))?;
+        f.seek(SeekFrom::Start(offset)).map_err(|e| format!("シークに失敗: {}", e))?;
+        let mut buf = vec![0u8; length as usize];
+        let n = f.read(&mut buf).map_err(|e| format!("読み出しに失敗: {}", e))?;
+        buf.truncate(n);
+        Ok(tauri::ipc::Response::new(buf))
     })
     .await
     .map_err(|e| format!("タスクの実行に失敗しました: {}", e))?
@@ -1588,8 +1703,10 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())
     .invoke_handler(tauri::generate_handler![
-      extract_audio, 
-      generate_waveform, 
+      extract_audio,
+      extract_playback_audio,
+      read_pcm_range,
+      generate_waveform,
       calculate_sync_offset, 
       export_video, 
       generate_proxy_video,

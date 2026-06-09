@@ -569,17 +569,18 @@ export function VideoPreview({
                       video.playbackRate = 1.0;
                       lastPlaybackRates.current[track.id] = 1.0;
                     }
-                  } else if (videoDrift < 0.017) {
-                    // 1) ズレが 17ms 未満の不感帯: playbackRate を 1.0 (等倍速) に維持して干渉しない
+                  } else if (videoDrift < 0.02) {
+                    // 1) ズレが 20ms 未満の不感帯: playbackRate を 1.0 (等倍速) に維持して干渉しない
                     if (video.playbackRate !== 1.0) {
                       video.playbackRate = 1.0;
                       lastPlaybackRates.current[track.id] = 1.0;
                     }
-                  } else if (videoDrift <= 0.25) {
-                    // 2) ズレが 17ms 〜 250ms の間: ズレに比例したマイルドなソフト追従（最大±3%制限、ハードシーク回避）
+                  } else if (videoDrift <= 0.5) {
+                    // 2) ズレが 20ms 〜 500ms: ソフト追従でなめらかに吸収（映像は無音なので速度変化は目立たない）。
+                    //    ゾーンを広げ・上限を上げて、ハードシーク(=一瞬のカクッ)をできるだけ起こさない。
                     const diff = validTime - video.currentTime;
-                    const kP = 0.15;
-                    const rateAdjustment = Math.max(-0.03, Math.min(0.03, diff * kP));
+                    const kP = 0.25;
+                    const rateAdjustment = Math.max(-0.05, Math.min(0.05, diff * kP));
                     const targetRate = 1.0 + rateAdjustment;
 
                     const currentRate = lastPlaybackRates.current[track.id] ?? 1.0;
@@ -588,8 +589,8 @@ export function VideoPreview({
                       lastPlaybackRates.current[track.id] = targetRate;
                     }
                   } else {
-                    // 3) ズレが 250ms 超: ハードシークで一気に修正
-                    if (timeSinceLastSeek > 500 && video.readyState >= 2) {
+                    // 3) ズレが 500ms 超（大きなストール等）: ハードシークで一気に修正（頻度は低い）
+                    if (timeSinceLastSeek > 800 && video.readyState >= 2) {
                       video.currentTime = validTime;
                       lastSeekTimes.current[track.id] = now;
                       video.playbackRate = 1.0;

@@ -827,6 +827,13 @@ function App() {
     });
     setStatusText(`追加完了: ${name}`);
 
+    // 【フェーズ3a】再生エンジン用にフル品質PCMを抽出して登録する（DAW式チャンク再生のデータ供給）。
+    // この時点ではまだ再生経路は切り替えていない（挙動は従来どおりメディア要素再生）。
+    invoke<{ path: string; durationSeconds: number }>('extract_playback_audio', { videoPath: selected })
+      .then(pb => audioEngine.playback.loadTrack(id, pb.path, 0, isRef))
+      .then(() => console.log(`[playback] loaded PCM for ${name}`))
+      .catch(e => console.error('再生用音声の抽出/読み込みに失敗:', e));
+
     // REF メディア読み込み時は、波形全体がちょうどウィンドウに収まるズーム倍率に自動設定する
     if (isRef) {
       const refDurationSec = peaks.length / 50; // 波形は 50pts/秒

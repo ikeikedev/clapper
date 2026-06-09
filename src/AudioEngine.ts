@@ -1,4 +1,5 @@
 import type { TrackAudioState, MasterAudioState, CompState, EQState } from './types';
+import { PlaybackEngine } from './PlaybackEngine';
 
 // EQ バンド定義（周波数順）。両端をシェルビング、中間をピーキングにする。
 // バンドを増減する場合はこの配列を編集するだけでよい（UI・処理とも自動追従）。
@@ -67,6 +68,12 @@ class AudioEngine {
   sources: Map<string, MediaElementAudioSourceNode> = new Map();
   videoElements: Map<string, HTMLMediaElement> = new Map();
   trackNodes: Map<string, TrackNodes> = new Map();
+
+  // チャンク再生エンジン（DAW式・サンプル精度のマルチトラック同期）
+  readonly playback = new PlaybackEngine(
+    () => this.getContext(),
+    (id: string) => this.getTrackInputNode(id),
+  );
   
   trackDataArraysL: Map<string, Uint8Array<ArrayBuffer>> = new Map();
   trackDataArraysR: Map<string, Uint8Array<ArrayBuffer>> = new Map();
@@ -87,7 +94,12 @@ class AudioEngine {
   init() {
     if (this.ctx) return;
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    this.ctx = new AudioContextClass();
+    // 再生用PCM(48kHz)と一致させ、チャンクバッファのリサンプルを避ける
+    try {
+      this.ctx = new AudioContextClass({ sampleRate: 48000 });
+    } catch {
+      this.ctx = new AudioContextClass();
+    }
 
     // Build master chain: MasterGain -> MasterEQ -> MasterComp -> MasterAnalyser -> destination
     const masterGain = this.ctx.createGain();
@@ -176,6 +188,54 @@ class AudioEngine {
     this.trackDataArraysR.delete(id);
   }
 
+  // ソースを除いた per-track 処理チェーンを構築する（comp -> EQ -> panner -> gain -> master ＋ メータ）。
+  // チャンク再生のソースは comp に接続する。
+  private buildTrackChain(id: string): TrackNodes {
+    const comp = this.ctx!.createDynamicsCompressor();
+    const eqBands = this.createEqBands();
+    const panner = this.ctx!.createStereoPanner();
+    const gain = this.ctx!.createGain();
+
+    const splitter = this.ctx!.createChannelSplitter(2);
+    const analyserL = this.ctx!.createAnalyser();
+    const analyserR = this.ctx!.createAnalyser();
+    analyserL.fftSize = 2048;
+    analyserR.fftSize = 2048;
+    this.trackDataArraysL.set(id, new Uint8Array(analyserL.fftSize));
+    this.trackDataArraysR.set(id, new Uint8Array(analyserR.fftSize));
+
+    // comp -> [EQ bands...] -> panner -> gain -> master
+    let prev: AudioNode = comp;
+    for (const b of eqBands) { prev.connect(b); prev = b; }
+    prev.connect(panner);
+    panner.connect(gain);
+    gain.connect(this.masterNodes!.gain);
+    gain.connect(splitter);
+    splitter.connect(analyserL, 0);
+    splitter.connect(analyserR, 1);
+
+    const nodes: TrackNodes = { gain, panner, eqBands, comp, analyserL, analyserR };
+    this.trackNodes.set(id, nodes);
+    return nodes;
+  }
+
+  // チャンク再生(バッファ)用にトラックチェーンを用意する（メディア要素ソースは作らない）
+  ensureTrackChain(id: string): void {
+    if (!this.ctx) this.init();
+    if (this.trackNodes.has(id)) return;
+    this.buildTrackChain(id);
+  }
+
+  // チャンク再生ソースの接続先（= comp）。PlaybackEngine から使う
+  getTrackInputNode(id: string): AudioNode | null {
+    return this.trackNodes.get(id)?.comp ?? null;
+  }
+
+  getContext(): AudioContext | null {
+    if (!this.ctx) this.init();
+    return this.ctx;
+  }
+
   connectVideo(id: string, video: HTMLMediaElement) {
     if (!this.ctx) this.init();
     const existingVideo = this.videoElements.get(id);
@@ -187,41 +247,10 @@ class AudioEngine {
 
     try {
       const source = this.ctx!.createMediaElementSource(video);
-
-      // Build per-track chain: source -> comp -> [EQ bands...] -> panner -> gain -> analyser -> masterGain
-      const comp = this.ctx!.createDynamicsCompressor();
-
-      const eqBands = this.createEqBands();
-
-      const panner = this.ctx!.createStereoPanner();
-      const gain = this.ctx!.createGain();
-
-      const splitter = this.ctx!.createChannelSplitter(2);
-      const analyserL = this.ctx!.createAnalyser();
-      const analyserR = this.ctx!.createAnalyser();
-      analyserL.fftSize = 2048;
-      analyserR.fftSize = 2048;
-      
-      const dataArrayL = new Uint8Array(analyserL.fftSize);
-      const dataArrayR = new Uint8Array(analyserR.fftSize);
-      this.trackDataArraysL.set(id, dataArrayL);
-      this.trackDataArraysR.set(id, dataArrayR);
-
+      const { comp } = this.buildTrackChain(id);
       source.connect(comp);
-      // comp -> [EQ bands...] -> panner
-      let prev: AudioNode = comp;
-      for (const b of eqBands) { prev.connect(b); prev = b; }
-      prev.connect(panner);
-      panner.connect(gain);
-      gain.connect(this.masterNodes!.gain);
-      
-      gain.connect(splitter);
-      splitter.connect(analyserL, 0);
-      splitter.connect(analyserR, 1);
-
       this.sources.set(id, source);
       this.videoElements.set(id, video);
-      this.trackNodes.set(id, { gain, panner, eqBands, comp, analyserL, analyserR });
     } catch (err) {
       console.error('Failed to connect audio source for', id, err);
     }

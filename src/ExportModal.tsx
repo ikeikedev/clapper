@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { TrackData, CutPoint, ExportSettings, ExportPayload, ExportRange } from './types';
+import type { TrackData, CutPoint, ExportSettings, ExportPayload, ExportRange, MasterAudioState } from './types';
 import { formatTimecode } from './Timeline';
 
 // ────────────────────────────────────────────────
@@ -79,6 +79,7 @@ interface ExportModalProps {
   onClose: () => void;
   exportRange: ExportRange;
   projectFps: 24 | 29.97 | 30 | 60;
+  masterState: MasterAudioState;
 }
 
 // ────────────────────────────────────────────────
@@ -123,6 +124,7 @@ export function ExportModal({
   onClose,
   exportRange,
   projectFps,
+  masterState,
 }: ExportModalProps) {
   const [preset, setPreset] = useState('custom');
   const [video, setVideo] = useState<VideoSettings>({
@@ -275,7 +277,7 @@ export function ExportModal({
         fadeOutDuration: useRange ? exportRange.fadeOutDuration : 0.5,
       };
 
-      const payload: ExportPayload = { tracks, cuts, settings };
+      const payload: ExportPayload = { tracks, cuts, settings, master: masterState };
 
       unlisten = await listen<number>('export-progress', event => {
         setProgress(event.payload);

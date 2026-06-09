@@ -10,7 +10,7 @@ import { MixerModal } from './MixerModal';
 import { ExportModal } from './ExportModal';
 import { PreferencesModal, DEFAULT_PREFERENCES, type AppPreferences } from './PreferencesModal';
 import { ShortcutHelpModal } from './ShortcutHelpModal';
-import { audioEngine, DEFAULT_MASTER_STATE, DEFAULT_TRACK_AUDIO_STATE } from './AudioEngine';
+import { audioEngine, DEFAULT_MASTER_STATE, DEFAULT_TRACK_AUDIO_STATE, DEFAULT_EQ } from './AudioEngine';
 import type { TrackData, CutPoint, MasterAudioState, ExportRange, ColorState } from './types';
 import { DEFAULT_COLOR_STATE } from './types';
 import './App.css';
@@ -826,6 +826,19 @@ function App() {
       return next;
     });
     setStatusText(`追加完了: ${name}`);
+
+    // REF メディア読み込み時は、波形全体がちょうどウィンドウに収まるズーム倍率に自動設定する
+    if (isRef) {
+      const refDurationSec = peaks.length / 50; // 波形は 50pts/秒
+      if (refDurationSec > 0) {
+        requestAnimationFrame(() => {
+          const scrollEl = document.querySelector('.timeline-right-scroll') as HTMLElement | null;
+          const availWidth = (scrollEl?.clientWidth ?? (window.innerWidth - 180)) - 24; // 左右に少し余白
+          const fitPps = Math.max(0.1, Math.min(200, availWidth / refDurationSec));
+          setPixelsPerSecond(fitPps);
+        });
+      }
+    }
   };
 
   const handleAddTrack = async (isRef: boolean) => {
@@ -1651,8 +1664,22 @@ function App() {
         console.error('元ファイルの存在確認に失敗しました', e);
       }
 
-      setTracks(projectData.tracks);
-      const cleaned = setCleanCuts(projectData.cuts, projectData.tracks);
+      // 古いプロジェクトの audioState を補完:
+      // - eqEnabled/compEnabled が無ければ false（バイパス）
+      // - eq が旧形式(オブジェクト)や長さ不一致なら EQ_BANDS の数に合わせた配列へ正規化
+      const normalizeEq = (eq: any): number[] =>
+        DEFAULT_EQ.map((_, i) => (Array.isArray(eq) && typeof eq[i] === 'number' ? eq[i] : 0));
+      const migratedTracks = (projectData.tracks as any[]).map((t: any) => ({
+        ...t,
+        audioState: {
+          ...t.audioState,
+          eq:          normalizeEq(t.audioState?.eq),
+          eqEnabled:   t.audioState?.eqEnabled   ?? false,
+          compEnabled: t.audioState?.compEnabled ?? false,
+        }
+      }));
+      setTracks(migratedTracks);
+      const cleaned = setCleanCuts(projectData.cuts, migratedTracks);
       // 古いプロジェクトファイルでフェード項目が欠けていても既定値で補完する
       const loadedRange: ExportRange = { ...DEFAULT_EXPORT_RANGE, ...(projectData.exportRange || {}) };
       setExportRange(loadedRange);
@@ -1789,6 +1816,29 @@ function App() {
       }
     }
     setIsPlaying(playing);
+  };
+
+  // 指定位置からプレビュー再生する（始点/終点/カットの▶ボタン共通）。
+  // currentTime と isPlaying を同一バッチで更新し、頭出し（シーク）と再生開始の
+  // 整合を同期ループ側の「協調リシンク（停止→一斉シーク→ready待ち→一斉再生）」に委ねる。
+  const handlePreviewFrom = async (time: number) => {
+    try {
+      await audioEngine.resume();
+    } catch (e) {
+      console.error("Failed to resume AudioEngine:", e);
+    }
+    setPreviewOverrideCameraId(null);
+
+    // 再生開始前に REF 要素(クロック)だけ先に頭出ししておく。
+    // スレーブ音声まで先行シークすると、協調リシンクの再シークと競合してプツプツになるため REF のみ。
+    const refTrack = tracks.find(t => t.isRef);
+    const refAudio = refTrack ? audioEngine.videoElements.get(refTrack.id) : null;
+    if (refTrack && refAudio) {
+      try { refAudio.currentTime = Math.max(0, time - refTrack.offsetSeconds); } catch { /* noop */ }
+    }
+
+    handleTimeChange(time);
+    setIsPlaying(true);
   };
 
   // 現在オンエア中のカメラIDを計算 (カットに基づく)
@@ -2446,11 +2496,9 @@ function App() {
                               </div>
 
                               <button
-                                onClick={async (e) => {
+                                onClick={(e) => {
                                   e.stopPropagation();
-                                  handleTimeChange(cut.timeSeconds);
-                                  try { await audioEngine.resume(); } catch { /* noop */ }
-                                  setIsPlaying(true);
+                                  handlePreviewFrom(cut.timeSeconds);
                                 }}
                                 title="このカット位置からプレビュー再生"
                                 style={{
@@ -2962,11 +3010,7 @@ function App() {
                     <button
                       className="btn btn-transport-flat"
                       disabled={!exportRange.useRange}
-                      onClick={() => {
-                        handleTimeChange(exportRange.start);
-                        setPreviewOverrideCameraId(null);
-                        handlePlayingChangeFromTimeline(true);
-                      }}
+                      onClick={() => { handlePreviewFrom(exportRange.start); }}
                       style={{
                         padding: 0,
                         width: '22px',
@@ -3114,12 +3158,7 @@ function App() {
                     <button
                       className="btn btn-transport-flat"
                       disabled={!exportRange.useRange}
-                      onClick={() => {
-                        const startPreview = Math.max(0, exportRange.end - 5.0);
-                        handleTimeChange(startPreview);
-                        setPreviewOverrideCameraId(null);
-                        handlePlayingChangeFromTimeline(true);
-                      }}
+                      onClick={() => { handlePreviewFrom(Math.max(0, exportRange.end - 5.0)); }}
                       style={{
                         padding: 0,
                         width: '22px',
@@ -3244,6 +3283,7 @@ function App() {
           onClose={() => setIsExportModalOpen(false)}
           exportRange={exportRange}
           projectFps={preferences.projectFps ?? 60}
+          masterState={masterState}
         />
       )}
 

@@ -8,13 +8,8 @@ export interface CutPoint {
   transitionDuration: number;
 }
 
-export interface EQState {
-  low: number;     // 80Hz  lowshelf, dB
-  lowMid: number;  // 300Hz peaking, dB
-  mid: number;     // 1kHz  peaking, dB
-  highMid: number; // 4kHz  peaking, dB
-  high: number;    // 12kHz highshelf, dB
-}
+// 各バンドのゲイン(dB)の配列。インデックスは AudioEngine.EQ_BANDS と対応する
+export type EQState = number[];
 
 export interface CompState {
   threshold: number; // dB, -60 to 0
@@ -31,7 +26,9 @@ export interface TrackAudioState {
   isMuted: boolean;
   isSoloed: boolean;
   eq: EQState;
+  eqEnabled: boolean;
   comp: CompState;
+  compEnabled: boolean;
 }
 
 export interface MasterAudioState {
@@ -39,7 +36,9 @@ export interface MasterAudioState {
   pan: number;
   isMono: boolean;
   eq: EQState;
+  eqEnabled: boolean;
   comp: CompState;
+  compEnabled: boolean;
 }
 
 export interface ColorState {
@@ -107,6 +106,7 @@ export interface ExportPayload {
   tracks: TrackData[];
   cuts: CutPoint[];
   settings: ExportSettings;
+  master: MasterAudioState;
 }
 
 // 縦スライダー用の非標準属性 `orient`（Firefox 等）を input で使えるよう型拡張する

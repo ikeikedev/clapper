@@ -50,6 +50,7 @@ export function VideoPreview({
   const observerRef = useRef<ResizeObserver | null>(null);
   const lastSeekTimes = useRef<{ [id: string]: number }>({});
   const lastOffsets = useRef<{ [id: string]: number }>({});
+  const lastAudioOffsets = useRef<{ [id: string]: number }>({});
   const lastPlaybackRates = useRef<{ [id: string]: number }>({});
   const lastRateChangeTimes = useRef<{ [id: string]: number }>({});
   const initialSyncDone = useRef<{ [id: string]: boolean }>({});
@@ -171,6 +172,9 @@ export function VideoPreview({
     });
     Object.keys(lastOffsets.current).forEach(id => {
       if (!currentIds.has(id)) delete lastOffsets.current[id];
+    });
+    Object.keys(lastAudioOffsets.current).forEach(id => {
+      if (!currentIds.has(id)) delete lastAudioOffsets.current[id];
     });
     Object.keys(lastPlaybackRates.current).forEach(id => {
       if (!currentIds.has(id)) delete lastPlaybackRates.current[id];
@@ -298,34 +302,20 @@ export function VideoPreview({
   const lastSyncCompletedTimeRef = useRef(0);
   const prevTimeRef = useRef(currentTime);
   const prevPlayingRef = useRef(isPlaying);
+  // 全トラックのオフセット(映像+音声)のシグネチャ。変化＝オフセット確定操作とみなし協調リシンクを発火する
+  const offsetSigRef = useRef<string>('');
+  // 音声が大きくズレた等で、次フレームに協調リシンクを要求するフラグ（レートは変えずシークで合わせ直す）
+  const requestResyncRef = useRef(false);
   const onSyncStateChangeRef = useRef(onSyncStateChange);
   useEffect(() => { onSyncStateChangeRef.current = onSyncStateChange; }, [onSyncStateChange]);
 
-  // オフセットドラッグ終了時の吸着処理
+  // オフセットドラッグ終了時の吸着は、ポーリングループ側の「協調リシンク」
+  // （offsetJumped 検知 → 全要素を一旦停止しクロックを止めた状態で一斉シーク→一斉再生）に一本化した。
+  // ここで個別に audio.currentTime をシークすると、再生中はシーク遅延ぶん後ろに着地して
+  // ズレが残り（プツプツの原因）になるため、手動スナップは行わない。
   useEffect(() => {
-    if (prevDraggingOffset.current && !isDraggingOffset) {
-      const now = performance.now();
-      tracks.forEach(track => {
-        const video = videoRefs.current[track.id];
-        if (!video) return;
-        if (track.isRef) return;
-
-        const targetTime = currentTime - track.offsetSeconds;
-        const validTime = Math.max(0, targetTime);
-        
-        video.currentTime = validTime;
-        lastSeekTimes.current[track.id] = now;
-        video.playbackRate = 1.0;
-        lastPlaybackRates.current[track.id] = 1.0;
-        
-        const shouldBePlaying = isPlaying && targetTime >= 0 && validTime < video.duration;
-        if (shouldBePlaying && video.paused) {
-          safePlay(video, `${track.id}_video`);
-        }
-      });
-    }
     prevDraggingOffset.current = isDraggingOffset;
-  }, [isDraggingOffset, currentTime, isPlaying, tracks, isGridView]);
+  }, [isDraggingOffset]);
 
   // 停止中に currentTime が変化したとき各動画要素を即時シーク（フレームステップ等）
   useEffect(() => {
@@ -364,8 +354,22 @@ export function VideoPreview({
       prevPlayingRef.current = playing;
       prevTimeRef.current = current;
 
+      // オフセット(映像/音声)が確定変更されたら協調リシンクを発火する。
+      // ドラッグ中は発火させず（連続停止/再開でガタつくため）、離した確定時に1回だけ走らせる。
+      // クロックを止めた状態で全要素を一斉シーク→準備完了を待って一斉再生するので、
+      // 音声のレートを一切変えずに（ピッチそのまま）シーク遅延の取りこぼしなくピタッと合う。
+      const offsetSig = currentTracks
+        .map(t => `${t.id}:${t.offsetSeconds}:${t.audioOffsetSeconds || 0}`)
+        .join('|');
+      const offsetJumped = !dragging && offsetSig !== offsetSigRef.current;
+      if (!dragging) offsetSigRef.current = offsetSig;
+
+      // 音声が大きくズレた場合などに要求される協調リシンク（前フレームで立てたフラグ）
+      const resyncRequested = requestResyncRef.current;
+      requestResyncRef.current = false;
+
       // 同期中に再トリガーしない（同期自体が引き起こすcurrentTimeの変動で連鎖しないように）
-      const shouldSync = playStarted || (timeJumped && !isSyncingRef.current);
+      const shouldSync = playStarted || ((timeJumped || offsetJumped || resyncRequested) && !isSyncingRef.current);
       if (shouldSync) {
         isSyncingRef.current = true;
         onSyncStateChangeRef.current?.(true);
@@ -486,13 +490,20 @@ export function VideoPreview({
           const wasShouldVideoBePlaying = !!lastShouldVideoBePlaying.current[track.id];
           lastShouldVideoBePlaying.current[track.id] = shouldVideoBePlaying;
 
-          const wasShouldAudioBePlaying = !!lastShouldAudioBePlaying.current[track.id];
           lastShouldAudioBePlaying.current[track.id] = shouldAudioBePlaying;
 
-          // オフセットが明示的に変更されたかを監視
+          // オフセットが明示的に変更されたかを監視。
+          // 映像は offsetSeconds のみ影響（audioOffset は映像に無関係）。
+          // 音声は両方の影響を受ける。フラグを分離して、DELAY(音声オフセット)操作中に
+          // 映像まで無駄に再シークされてカクつくのを防ぐ。
           const prevOffset = lastOffsets.current[track.id];
-          const offsetChanged = prevOffset !== undefined && prevOffset !== track.offsetSeconds;
+          const prevAudioOffset = lastAudioOffsets.current[track.id];
+          const curAudioOffset = track.audioOffsetSeconds || 0;
+          const videoOffsetChanged = prevOffset !== undefined && prevOffset !== track.offsetSeconds;
+          const audioOffsetChanged = prevAudioOffset !== undefined && prevAudioOffset !== curAudioOffset;
+          const offsetChanged = videoOffsetChanged || audioOffsetChanged; // 音声側で使用
           lastOffsets.current[track.id] = track.offsetSeconds;
+          lastAudioOffsets.current[track.id] = curAudioOffset;
 
           // ----------------------------------------------------
           // A. 映像用ビデオ要素の制御
@@ -500,9 +511,9 @@ export function VideoPreview({
           if (video && !track.isAudioOnly && !isNaN(video.duration)) {
             const videoDrift = Math.abs(video.currentTime - validTime);
 
-            if (!playing || dragging || offsetChanged) {
+            if (!playing || dragging || videoOffsetChanged) {
               // 停止中、スクラブ中、ドラッグ中のシーク（ハード吸着）
-              if (videoDrift > 0.02 || offsetChanged) {
+              if (videoDrift > 0.02 || videoOffsetChanged) {
                 const timeSinceLastSeek = now - (lastSeekTimes.current[track.id] || 0);
                 const isScrubbing = !playing && !dragging;
                 const throttleLimit = isScrubbing ? 60 : 0;
@@ -511,7 +522,7 @@ export function VideoPreview({
                 if (isScrubbing && !isVisible) {
                   // 非表示トラックは無駄なシークを行わない
                 } else {
-                  if ((timeSinceLastSeek > throttleLimit || offsetChanged) && (dragging || offsetChanged || !video.seeking) && video.readyState >= 2) {
+                  if ((timeSinceLastSeek > throttleLimit || videoOffsetChanged) && (dragging || videoOffsetChanged || !video.seeking) && video.readyState >= 2) {
                     video.currentTime = validTime;
                     lastSeekTimes.current[track.id] = now;
                     video.playbackRate = 1.0;
@@ -528,8 +539,8 @@ export function VideoPreview({
               if (shouldVideoBePlaying) {
                 if (video.paused) {
                   // 開始時吸着
-                  if (!wasShouldVideoBePlaying || offsetChanged) {
-                    if (videoDrift > 0.02 || offsetChanged) {
+                  if (!wasShouldVideoBePlaying || videoOffsetChanged) {
+                    if (videoDrift > 0.02 || videoOffsetChanged) {
                       video.currentTime = validTime;
                       lastSeekTimes.current[track.id] = now;
                     }
@@ -594,16 +605,19 @@ export function VideoPreview({
           if (audio && !isNaN(audio.duration)) {
             const audioDrift = Math.abs(audio.currentTime - audioValidTime);
 
-            if (audio.playbackRate !== 1.0) {
-              audio.playbackRate = 1.0;
-            }
+            // 音声はレート(ピッチ)を一切変えない。等倍固定を維持する。
+            if (audio.playbackRate !== 1.0) audio.playbackRate = 1.0;
 
             if (!playing || dragging || offsetChanged) {
-              if (audioDrift > 0.02 || offsetChanged) {
+              // 停止/スクラブ時はシークで合わせる（再生中ではないのでプツッとならない）。
+              // 再生中のドラッグ中は毎フレームシークするとプツプツするためスキップし、
+              // 確定時に協調リシンク(offsetJumped)でまとめて合わせ直す。
+              const skipSeekDuringPlaybackDrag = playing && (dragging || offsetChanged);
+              if (!skipSeekDuringPlaybackDrag && audioDrift > 0.02) {
                 const timeSinceLastAudioSeek = now - (lastAudioSeekTimes.current[track.id] || 0);
                 const isScrubbing = !playing && !dragging;
                 const throttleLimit = isScrubbing ? 60 : 0;
-                if ((timeSinceLastAudioSeek > throttleLimit || offsetChanged) && (dragging || offsetChanged || !audio.seeking) && audio.readyState >= 2) {
+                if (timeSinceLastAudioSeek > throttleLimit && !audio.seeking && audio.readyState >= 2) {
                   audio.currentTime = audioValidTime;
                   lastAudioSeekTimes.current[track.id] = now;
                 }
@@ -614,22 +628,23 @@ export function VideoPreview({
             } else {
               if (shouldAudioBePlaying) {
                 if (audio.paused) {
-                  if (!wasShouldAudioBePlaying || offsetChanged) {
-                    if (audioDrift > 0.02 || offsetChanged) {
-                      audio.currentTime = audioValidTime;
-                      lastAudioSeekTimes.current[track.id] = now;
-                    }
+                  // 一時停止からの復帰時のみ、停止中なのでシークしても無音切れにならない
+                  if (audioDrift > 0.02) {
+                    audio.currentTime = audioValidTime;
+                    lastAudioSeekTimes.current[track.id] = now;
                   }
                   safePlay(audio, `${track.id}_audio`);
-                } else if (!audio.seeking) {
-                  const timeSinceLastAudioSeek = now - (lastAudioSeekTimes.current[track.id] || 0);
-
-                  // 音声はピッチ変化を防ぐため playbackRate 変更を避け、100ms 以上のズレに対してのみ緩やかにシークで吸着
-                  if (audioDrift > 0.10) {
-                    if (timeSinceLastAudioSeek > 1500 && audio.readyState >= 2) {
-                      audio.currentTime = audioValidTime;
-                      lastAudioSeekTimes.current[track.id] = now;
-                    }
+                } else {
+                  // 通常再生中はシークしない（プツッとなるため）。レートも変えない。
+                  // 大きくズレた場合のみ協調リシンクを要求し、全要素を一旦止めてピタッと合わせ直す。
+                  // ただし「聞こえている(ミュートでない)track」のドリフトだけを対象にする。
+                  // ミュートのスレーブ(無音)のズレでリシンクすると、聞こえているREFまで巻き込んで
+                  // 一瞬止まり（=プツッ）の原因になるため除外する。
+                  const anySoloed = currentTracks.some(t => t.audioState?.isSoloed);
+                  const isAudible = !track.audioState?.isMuted && (!anySoloed || !!track.audioState?.isSoloed);
+                  const postSyncCooldown = (now - lastSyncCompletedTimeRef.current) < 500;
+                  if (isAudible && !postSyncCooldown && audioDrift > 0.15) {
+                    requestResyncRef.current = true;
                   }
                 }
               } else if (!shouldAudioBePlaying && !audio.paused) {

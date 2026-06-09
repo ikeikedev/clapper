@@ -1,6 +1,18 @@
-import type { TrackAudioState, MasterAudioState, CompState } from './types';
+import type { TrackAudioState, MasterAudioState, CompState, EQState } from './types';
 
-export const DEFAULT_EQ = { low: 0, lowMid: 0, mid: 0, highMid: 0, high: 0 };
+// EQ バンド定義（周波数順）。両端をシェルビング、中間をピーキングにする。
+// バンドを増減する場合はこの配列を編集するだけでよい（UI・処理とも自動追従）。
+export interface EQBand { freq: number; type: BiquadFilterType; q: number; label: string }
+export const EQ_BANDS: EQBand[] = [
+  { freq: 50,   type: 'lowshelf',  q: 0.7, label: '50' },
+  { freq: 120,  type: 'peaking',   q: 1.0, label: '120' },
+  { freq: 300,  type: 'peaking',   q: 1.0, label: '300' },
+  { freq: 700,  type: 'peaking',   q: 1.0, label: '700' },
+  { freq: 1600, type: 'peaking',   q: 1.0, label: '1.6k' },
+  { freq: 3500, type: 'peaking',   q: 1.0, label: '3.5k' },
+  { freq: 7000, type: 'highshelf', q: 0.7, label: '7k' },
+];
+export const DEFAULT_EQ: EQState = EQ_BANDS.map(() => 0);
 export const DEFAULT_COMP: CompState = {
   threshold: -24,
   ratio: 2,
@@ -14,39 +26,36 @@ export const DEFAULT_TRACK_AUDIO_STATE: TrackAudioState = {
   isMono: false,
   isMuted: false,
   isSoloed: false,
-  eq: { ...DEFAULT_EQ },
-  comp: { ...DEFAULT_COMP }
+  eq: [...DEFAULT_EQ],
+  eqEnabled: false,
+  comp: { ...DEFAULT_COMP },
+  compEnabled: false,
 };
 export const DEFAULT_MASTER_STATE: MasterAudioState = {
   volume: 1.0,
   pan: 0,
   isMono: false,
-  eq: { ...DEFAULT_EQ },
-  comp: { ...DEFAULT_COMP, threshold: -6, ratio: 1.5 }
+  eq: [...DEFAULT_EQ],
+  eqEnabled: false,
+  comp: { ...DEFAULT_COMP, threshold: -6, ratio: 1.5 },
+  compEnabled: false,
 };
 
 type TrackNodes = {
   gain: GainNode;
   panner: StereoPannerNode;
-  eqLow: BiquadFilterNode;
-  eqLowMid: BiquadFilterNode;
-  eqMid: BiquadFilterNode;
-  eqHighMid: BiquadFilterNode;
-  eqHigh: BiquadFilterNode;
+  eqBands: BiquadFilterNode[];
   comp: DynamicsCompressorNode;
   analyserL: AnalyserNode;
   analyserR: AnalyserNode;
 };
 
 type MasterNodes = {
-  gain: GainNode;
+  gain: GainNode;        // トラックの合算入力（サミングバス, gain=1固定）
   panner: StereoPannerNode;
-  eqLow: BiquadFilterNode;
-  eqLowMid: BiquadFilterNode;
-  eqMid: BiquadFilterNode;
-  eqHighMid: BiquadFilterNode;
-  eqHigh: BiquadFilterNode;
+  eqBands: BiquadFilterNode[];
   comp: DynamicsCompressorNode;
+  fader: GainNode;       // マスターフェーダー（音量+モノ）。チェーンの最後に置く
   analyserL: AnalyserNode;
   analyserR: AnalyserNode;
   monitorGain: GainNode;
@@ -64,6 +73,17 @@ class AudioEngine {
   masterDataArrayL: Uint8Array<ArrayBuffer> = new Uint8Array(0);
   masterDataArrayR: Uint8Array<ArrayBuffer> = new Uint8Array(0);
 
+  // EQ_BANDS 定義に従って直列の BiquadFilter チェーンを生成する
+  private createEqBands(): BiquadFilterNode[] {
+    return EQ_BANDS.map(band => {
+      const f = this.ctx!.createBiquadFilter();
+      f.type = band.type;
+      f.frequency.value = band.freq;
+      if (band.type === 'peaking') f.Q.value = band.q;
+      return f;
+    });
+  }
+
   init() {
     if (this.ctx) return;
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -72,16 +92,7 @@ class AudioEngine {
     // Build master chain: MasterGain -> MasterEQ -> MasterComp -> MasterAnalyser -> destination
     const masterGain = this.ctx.createGain();
 
-    const masterEqLow = this.ctx.createBiquadFilter();
-    masterEqLow.type = 'lowshelf'; masterEqLow.frequency.value = 80;
-    const masterEqLowMid = this.ctx.createBiquadFilter();
-    masterEqLowMid.type = 'peaking'; masterEqLowMid.frequency.value = 300; masterEqLowMid.Q.value = 1.0;
-    const masterEqMid = this.ctx.createBiquadFilter();
-    masterEqMid.type = 'peaking'; masterEqMid.frequency.value = 1000; masterEqMid.Q.value = 1.0;
-    const masterEqHighMid = this.ctx.createBiquadFilter();
-    masterEqHighMid.type = 'peaking'; masterEqHighMid.frequency.value = 4000; masterEqHighMid.Q.value = 1.0;
-    const masterEqHigh = this.ctx.createBiquadFilter();
-    masterEqHigh.type = 'highshelf'; masterEqHigh.frequency.value = 12000;
+    const masterEqBands = this.createEqBands();
 
     const masterPanner = this.ctx.createStereoPanner();
 
@@ -100,32 +111,33 @@ class AudioEngine {
     this.masterDataArrayL = new Uint8Array(masterAnalyserL.fftSize);
     this.masterDataArrayR = new Uint8Array(masterAnalyserR.fftSize);
 
-    masterGain.connect(masterEqLow);
-    masterEqLow.connect(masterEqLowMid);
-    masterEqLowMid.connect(masterEqMid);
-    masterEqMid.connect(masterEqHighMid);
-    masterEqHighMid.connect(masterEqHigh);
-    masterEqHigh.connect(masterPanner);
+    // マスターフェーダー（音量+モノ）。フェーダーは最後（comp の後ろ）に置く
+    const masterFader = this.ctx.createGain();
+
+    // チェーン: masterGain(sum) -> [EQ bands...] -> panner -> comp -> fader
+    let mprev: AudioNode = masterGain;
+    for (const b of masterEqBands) { mprev.connect(b); mprev = b; }
+    mprev.connect(masterPanner);
     masterPanner.connect(masterComp);
-    
+    masterComp.connect(masterFader);
+
     const monitorGain = this.ctx.createGain();
-    
-    // Route to destination via monitorGain
-    masterComp.connect(monitorGain);
+
+    // Route to destination via monitorGain（フェーダー後）
+    masterFader.connect(monitorGain);
     monitorGain.connect(this.ctx.destination);
-    
-    // Route to splitters for metering
-    masterComp.connect(splitter);
+
+    // Route to splitters for metering（ポストフェーダー計測）
+    masterFader.connect(splitter);
     splitter.connect(masterAnalyserL, 0);
     splitter.connect(masterAnalyserR, 1);
 
     this.masterNodes = {
       gain: masterGain,
       panner: masterPanner,
-      eqLow: masterEqLow, eqLowMid: masterEqLowMid,
-      eqMid: masterEqMid, eqHighMid: masterEqHighMid,
-      eqHigh: masterEqHigh,
+      eqBands: masterEqBands,
       comp: masterComp,
+      fader: masterFader,
       analyserL: masterAnalyserL,
       analyserR: masterAnalyserR,
       monitorGain: monitorGain
@@ -153,11 +165,7 @@ class AudioEngine {
     if (nodes) {
       try { nodes.gain.disconnect(); } catch (_) { }
       try { nodes.panner.disconnect(); } catch (_) { }
-      try { nodes.eqLow.disconnect(); } catch (_) { }
-      try { nodes.eqLowMid.disconnect(); } catch (_) { }
-      try { nodes.eqMid.disconnect(); } catch (_) { }
-      try { nodes.eqHighMid.disconnect(); } catch (_) { }
-      try { nodes.eqHigh.disconnect(); } catch (_) { }
+      nodes.eqBands.forEach(b => { try { b.disconnect(); } catch (_) { } });
       try { nodes.comp.disconnect(); } catch (_) { }
       try { nodes.analyserL.disconnect(); } catch (_) { }
       try { nodes.analyserR.disconnect(); } catch (_) { }
@@ -180,19 +188,10 @@ class AudioEngine {
     try {
       const source = this.ctx!.createMediaElementSource(video);
 
-      // Build per-track chain: source -> comp -> 5xEQ -> panner -> gain -> analyser -> masterGain
+      // Build per-track chain: source -> comp -> [EQ bands...] -> panner -> gain -> analyser -> masterGain
       const comp = this.ctx!.createDynamicsCompressor();
 
-      const eqLow = this.ctx!.createBiquadFilter();
-      eqLow.type = 'lowshelf'; eqLow.frequency.value = 80;
-      const eqLowMid = this.ctx!.createBiquadFilter();
-      eqLowMid.type = 'peaking'; eqLowMid.frequency.value = 300; eqLowMid.Q.value = 1.0;
-      const eqMid = this.ctx!.createBiquadFilter();
-      eqMid.type = 'peaking'; eqMid.frequency.value = 1000; eqMid.Q.value = 1.0;
-      const eqHighMid = this.ctx!.createBiquadFilter();
-      eqHighMid.type = 'peaking'; eqHighMid.frequency.value = 4000; eqHighMid.Q.value = 1.0;
-      const eqHigh = this.ctx!.createBiquadFilter();
-      eqHigh.type = 'highshelf'; eqHigh.frequency.value = 12000;
+      const eqBands = this.createEqBands();
 
       const panner = this.ctx!.createStereoPanner();
       const gain = this.ctx!.createGain();
@@ -209,12 +208,10 @@ class AudioEngine {
       this.trackDataArraysR.set(id, dataArrayR);
 
       source.connect(comp);
-      comp.connect(eqLow);
-      eqLow.connect(eqLowMid);
-      eqLowMid.connect(eqMid);
-      eqMid.connect(eqHighMid);
-      eqHighMid.connect(eqHigh);
-      eqHigh.connect(panner);
+      // comp -> [EQ bands...] -> panner
+      let prev: AudioNode = comp;
+      for (const b of eqBands) { prev.connect(b); prev = b; }
+      prev.connect(panner);
       panner.connect(gain);
       gain.connect(this.masterNodes!.gain);
       
@@ -224,7 +221,7 @@ class AudioEngine {
 
       this.sources.set(id, source);
       this.videoElements.set(id, video);
-      this.trackNodes.set(id, { gain, panner, eqLow, eqLowMid, eqMid, eqHighMid, eqHigh, comp, analyserL, analyserR });
+      this.trackNodes.set(id, { gain, panner, eqBands, comp, analyserL, analyserR });
     } catch (err) {
       console.error('Failed to connect audio source for', id, err);
     }
@@ -237,19 +234,17 @@ class AudioEngine {
 
     nodes.panner.pan.value = state.pan;
 
-    // 5-band EQ
-    nodes.eqLow.gain.setTargetAtTime(state.eq.low, t, 0.05);
-    nodes.eqLowMid.gain.setTargetAtTime(state.eq.lowMid, t, 0.05);
-    nodes.eqMid.gain.setTargetAtTime(state.eq.mid, t, 0.05);
-    nodes.eqHighMid.gain.setTargetAtTime(state.eq.highMid, t, 0.05);
-    nodes.eqHigh.gain.setTargetAtTime(state.eq.high, t, 0.05);
+    // EQ（eqEnabled=false のときは全バンドを 0dB にしてバイパス）
+    const eq = state.eqEnabled !== false ? state.eq : DEFAULT_EQ;
+    nodes.eqBands.forEach((b, i) => b.gain.setTargetAtTime(eq[i] ?? 0, t, 0.05));
 
-    // Compressor
-    nodes.comp.threshold.setTargetAtTime(state.comp.threshold, t, 0.05);
-    nodes.comp.ratio.setTargetAtTime(state.comp.ratio, t, 0.05);
-    nodes.comp.attack.setTargetAtTime(state.comp.attack, t, 0.05);
-    nodes.comp.release.setTargetAtTime(state.comp.release, t, 0.05);
-    nodes.comp.knee.setTargetAtTime(state.comp.knee, t, 0.05);
+    // Compressor (compEnabled=false のときは ratio=1 / threshold=0 でバイパス)
+    const comp = state.compEnabled !== false ? state.comp : { ...state.comp, ratio: 1, threshold: 0 };
+    nodes.comp.threshold.setTargetAtTime(comp.threshold, t, 0.05);
+    nodes.comp.ratio.setTargetAtTime(comp.ratio, t, 0.05);
+    nodes.comp.attack.setTargetAtTime(comp.attack, t, 0.05);
+    nodes.comp.release.setTargetAtTime(comp.release, t, 0.05);
+    nodes.comp.knee.setTargetAtTime(comp.knee, t, 0.05);
 
     // Mono downmix
     if (state.isMono) {
@@ -271,27 +266,26 @@ class AudioEngine {
 
     nodes.panner.pan.value = state.pan;
 
+    // 音量・モノはフェーダー(チェーン最後)に適用。サミング入力(gain)は 1.0 固定のまま
     if (state.isMono) {
-      nodes.gain.channelCountMode = 'explicit';
-      nodes.gain.channelCount = 1;
+      nodes.fader.channelCountMode = 'explicit';
+      nodes.fader.channelCount = 1;
     } else {
-      nodes.gain.channelCountMode = 'max';
-      nodes.gain.channelCount = 2;
+      nodes.fader.channelCountMode = 'max';
+      nodes.fader.channelCount = 2;
     }
 
-    nodes.gain.gain.setTargetAtTime(state.volume, t, 0.05);
+    nodes.fader.gain.setTargetAtTime(state.volume, t, 0.05);
 
-    nodes.eqLow.gain.setTargetAtTime(state.eq.low, t, 0.05);
-    nodes.eqLowMid.gain.setTargetAtTime(state.eq.lowMid, t, 0.05);
-    nodes.eqMid.gain.setTargetAtTime(state.eq.mid, t, 0.05);
-    nodes.eqHighMid.gain.setTargetAtTime(state.eq.highMid, t, 0.05);
-    nodes.eqHigh.gain.setTargetAtTime(state.eq.high, t, 0.05);
+    const meq = state.eqEnabled !== false ? state.eq : DEFAULT_EQ;
+    nodes.eqBands.forEach((b, i) => b.gain.setTargetAtTime(meq[i] ?? 0, t, 0.05));
 
-    nodes.comp.threshold.setTargetAtTime(state.comp.threshold, t, 0.05);
-    nodes.comp.ratio.setTargetAtTime(state.comp.ratio, t, 0.05);
-    nodes.comp.attack.setTargetAtTime(state.comp.attack, t, 0.05);
-    nodes.comp.release.setTargetAtTime(state.comp.release, t, 0.05);
-    nodes.comp.knee.setTargetAtTime(state.comp.knee, t, 0.05);
+    const mcomp = state.compEnabled !== false ? state.comp : { ...state.comp, ratio: 1, threshold: 0 };
+    nodes.comp.threshold.setTargetAtTime(mcomp.threshold, t, 0.05);
+    nodes.comp.ratio.setTargetAtTime(mcomp.ratio, t, 0.05);
+    nodes.comp.attack.setTargetAtTime(mcomp.attack, t, 0.05);
+    nodes.comp.release.setTargetAtTime(mcomp.release, t, 0.05);
+    nodes.comp.knee.setTargetAtTime(mcomp.knee, t, 0.05);
   }
 
   setMasterVolume(vol: number) {
@@ -331,12 +325,12 @@ class AudioEngine {
     return Math.abs(nodes.comp.reduction);
   }
 
-  getMasterMeterLevel(): { l: number, r: number } {
+  getMasterMeterLevel(isMono = false): { l: number, r: number } {
     if (!this.masterNodes) return { l: 0, r: 0 };
-    
+
     this.masterNodes.analyserL.getByteTimeDomainData(this.masterDataArrayL);
     this.masterNodes.analyserR.getByteTimeDomainData(this.masterDataArrayR);
-    
+
     let sumSqL = 0, sumSqR = 0;
     for (let i = 0; i < this.masterDataArrayL.length; i++) {
       const vL = (this.masterDataArrayL[i] - 128) / 128.0;
@@ -344,10 +338,10 @@ class AudioEngine {
       sumSqL += vL * vL;
       sumSqR += vR * vR;
     }
-    return {
-      l: Math.sqrt(sumSqL / this.masterDataArrayL.length),
-      r: Math.sqrt(sumSqR / this.masterDataArrayR.length)
-    };
+    const l = Math.sqrt(sumSqL / this.masterDataArrayL.length);
+    // モノ時は fader.channelCount=1 のため splitter の R が無音になる
+    const r = isMono ? l : Math.sqrt(sumSqR / this.masterDataArrayR.length);
+    return { l, r };
   }
 
   getMasterGRLevel(): number {

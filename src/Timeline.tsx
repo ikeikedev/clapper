@@ -1118,12 +1118,16 @@ export function Timeline({
                       )}
 
                       {track.audioOffsetSeconds && track.audioOffsetSeconds !== 0 ? (
-                        <div
-                          style={{ fontSize: '0.65rem', color: '#fbbf24', background: 'rgba(251, 191, 36, 0.12)', border: '1px solid rgba(251, 191, 36, 0.3)', borderRadius: '3px', padding: '2px 4px', fontWeight: 'bold', flexShrink: 0 }}
-                          title={`音声ディレイ: ${(track.audioOffsetSeconds * 1000).toFixed(0)}ms`}
+                        <span
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', fontSize: '0.75rem', color: '#fcd34d', fontWeight: 600, fontFamily: 'monospace', flexShrink: 0, userSelect: 'none' }}
+                          title={`音声ディレイ: ${(track.audioOffsetSeconds * 1000).toFixed(0)}ms（ミキサーのDELAYで調整）`}
                         >
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="9" />
+                            <polyline points="12 7 12 12 15 14" />
+                          </svg>
                           {`${track.audioOffsetSeconds > 0 ? '+' : ''}${(track.audioOffsetSeconds * 1000).toFixed(0)}ms`}
-                        </div>
+                        </span>
                       ) : null}
                     </div>
 

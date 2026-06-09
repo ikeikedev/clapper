@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import type { TrackData, TrackAudioState, MasterAudioState, EQState, CompState } from './types';
-import { audioEngine, DEFAULT_COMP } from './AudioEngine';
+import { audioEngine, DEFAULT_COMP, DEFAULT_EQ, EQ_BANDS } from './AudioEngine';
 import { getTrackColor } from './Timeline';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -143,50 +143,123 @@ function GRMeter({ getGR }: { getGR: () => number }) {
   );
 }
 
+// ── Power Toggle (電源アイコン) ────────────────────────────────────────────────
+
+function PowerToggle({ enabled, onToggle, color }: { enabled: boolean; onToggle: () => void; color: string }) {
+  // 基準スタイル（ホバー解除時に戻す値）
+  const baseBg = enabled ? `${color}26` : 'rgba(255,255,255,0.04)';
+  const baseBorder = enabled ? color : '#475569';
+  const baseColor = enabled ? color : '#64748b';
+  const hoverBg = enabled ? `${color}40` : 'rgba(255,255,255,0.10)';
+  const hoverBorder = enabled ? color : '#64748b';
+  const hoverColor = enabled ? color : '#94a3b8';
+  return (
+    <button
+      onClick={onToggle}
+      title={enabled ? 'クリックでバイパス（オフ）' : 'クリックで有効化（オン）'}
+      onMouseEnter={e => {
+        e.currentTarget.style.background = hoverBg;
+        e.currentTarget.style.borderColor = hoverBorder;
+        e.currentTarget.style.color = hoverColor;
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.background = baseBg;
+        e.currentTarget.style.borderColor = baseBorder;
+        e.currentTarget.style.color = baseColor;
+      }}
+      style={{
+        width: 28, height: 28, borderRadius: '50%',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: baseBg,
+        border: `1.5px solid ${baseBorder}`,
+        color: baseColor,
+        cursor: 'pointer', padding: 0, flexShrink: 0,
+        transition: 'all 0.15s',
+      }}
+    >
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+        <line x1="12" y1="2" x2="12" y2="12" />
+      </svg>
+    </button>
+  );
+}
+
 // ── EQ Section ───────────────────────────────────────────────────────────────
 
-const EQ_BANDS: { key: keyof EQState; label: string; freq: string }[] = [
-  { key: 'low',     label: 'LF',  freq: '80Hz' },
-  { key: 'lowMid',  label: 'LMF', freq: '300Hz' },
-  { key: 'mid',     label: 'MF',  freq: '1kHz' },
-  { key: 'highMid', label: 'HMF', freq: '4kHz' },
-  { key: 'high',    label: 'HF',  freq: '12kHz' },
-];
-
-function EQSection({ eq, onChange }: { eq: EQState; onChange: (eq: EQState) => void }) {
+function EQSection({ eq, enabled, onChange, onToggleEnabled }: {
+  eq: EQState;
+  enabled: boolean;
+  onChange: (eq: EQState) => void;
+  onToggleEnabled: () => void;
+}) {
+  // 1バンドだけ変更した新しい配列を返す
+  const withBand = (i: number, val: number) => EQ_BANDS.map((_, idx) => idx === i ? val : (eq[idx] ?? 0));
+  const resetAll = () => onChange([...DEFAULT_EQ]);
+  const btnBase: React.CSSProperties = {
+    height: 22, padding: '0 8px', border: 'none', borderRadius: 4,
+    fontSize: '0.72rem', fontWeight: 'bold', cursor: 'pointer'
+  };
   return (
-    <div style={{ display: 'flex', gap: 16, justifyContent: 'center', padding: '20px' }}>
-      {EQ_BANDS.map(band => (
-        <div key={band.key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: '0.8rem', color: '#e2e8f0', fontWeight: 'bold' }}>{`+${Math.round(eq[band.key] > 0 ? eq[band.key] : 0)}`}</span>
-          <input
-            type="range"
-            orient="vertical"
-            min={-15} max={15} step={0.5}
-            value={eq[band.key]}
-            onChange={e => onChange({ ...eq, [band.key]: parseFloat(e.target.value) })}
-            onDoubleClick={() => onChange({ ...eq, [band.key]: 0 })}
-            onClick={e => { if (e.ctrlKey) onChange({ ...eq, [band.key]: 0 }) }}
-            className="eq-fader"
-            style={{ 
-              writingMode: 'vertical-lr', 
-              direction: 'rtl',
-              ['--fader-color' as any]: '#3b82f6',
-              ['--percent' as any]: `${((eq[band.key] + 15) / 30 * 100)}%`
-            }}
-          />
-          <span style={{ fontSize: '0.8rem', color: '#e2e8f0', fontWeight: 'bold' }}>{`${Math.round(eq[band.key] < 0 ? eq[band.key] : 0)}`}</span>
-          <span style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: 8 }}>{band.label}</span>
-          <span style={{ fontSize: '0.7rem', color: '#64748b' }}>{band.freq}</span>
-        </div>
-      ))}
+    <div>
+      {/* ヘッダー: 電源トグル(左) と RESET(右) を離して配置 */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px 0' }}>
+        <PowerToggle enabled={enabled} onToggle={onToggleEnabled} color="#3b82f6" />
+        <button
+          onClick={resetAll}
+          style={{ ...btnBase, background: 'rgba(255,255,255,0.08)', color: '#94a3b8' }}
+          title="全バンドを0dBにリセット"
+        >RESET</button>
+      </div>
+      {/* バンドスライダー */}
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'center', padding: '12px 16px 20px', opacity: enabled ? 1 : 0.4, pointerEvents: enabled ? 'auto' : 'none' }}>
+        {EQ_BANDS.map((band, i) => {
+          const v = eq[i] ?? 0;
+          const display = v === 0 ? '0' : (v > 0 ? `+${Math.round(v)}` : `${Math.round(v)}`);
+          const isActive = v !== 0;
+          const unit = band.freq >= 1000 ? `${band.freq / 1000}k` : `${band.freq}`;
+          return (
+            <div key={band.freq} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.76rem', fontWeight: 'bold', color: isActive ? '#60a5fa' : '#64748b', minHeight: '1.1em', lineHeight: 1 }}>
+                {display}
+              </span>
+              <input
+                type="range"
+                orient="vertical"
+                min={-15} max={15} step={0.5}
+                value={v}
+                onChange={e => onChange(withBand(i, parseFloat(e.target.value)))}
+                onDoubleClick={() => onChange(withBand(i, 0))}
+                onClick={e => { if (e.ctrlKey) onChange(withBand(i, 0)); }}
+                className="eq-fader"
+                style={{
+                  writingMode: 'vertical-lr',
+                  direction: 'rtl',
+                  ['--fader-color' as any]: isActive ? '#3b82f6' : '#475569',
+                  ['--percent' as any]: `${((v + 15) / 30 * 100)}%`
+                }}
+              />
+              <span style={{ fontSize: '0.7rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>{unit}</span>
+              <span style={{ fontSize: '0.62rem', color: '#64748b' }}>
+                {band.type === 'lowshelf' ? 'LO' : band.type === 'highshelf' ? 'HI' : 'Hz'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
 // ── Comp Section ─────────────────────────────────────────────────────────────
 
-function CompSection({ comp, getGR, onChange }: { comp: CompState; getGR: () => number; onChange: (comp: CompState) => void }) {
+function CompSection({ comp, enabled, getGR, onChange, onToggleEnabled }: {
+  comp: CompState;
+  enabled: boolean;
+  getGR: () => number;
+  onChange: (comp: CompState) => void;
+  onToggleEnabled: () => void;
+}) {
   const row = (label: string, value: number, min: number, max: number, step: number, unit: string, key: keyof CompState, fmt?: (v: number) => string) => {
     const handleReset = () => onChange({ ...comp, [key]: DEFAULT_COMP[key] });
     return (
@@ -206,15 +279,29 @@ function CompSection({ comp, getGR, onChange }: { comp: CompState; getGR: () => 
     );
   };
 
+  const btnBase: React.CSSProperties = {
+    height: 22, padding: '0 8px', border: 'none', borderRadius: 4,
+    fontSize: '0.72rem', fontWeight: 'bold', cursor: 'pointer'
+  };
   return (
     <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 12, minWidth: 350 }}>
-      {row('Threshold', comp.threshold, -60, 0, 1, 'dB', 'threshold', v => `${v}dB`)}
-      {row('Ratio',     comp.ratio,     1,   20, 0.5, ':1', 'ratio',     v => `${v}:1`)}
-      {row('Attack',    comp.attack,    0.0, 1.0, 0.001, 's', 'attack',  v => `${(v * 1000).toFixed(0)}ms`)}
-      {row('Release',   comp.release,   0.0, 2.0, 0.01,  's', 'release', v => `${(v * 1000).toFixed(0)}ms`)}
-      {row('Knee',      comp.knee,      0,   40,  1,    'dB', 'knee',    v => `${v}dB`)}
-      
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, padding: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: 8 }}>
+      {/* ヘッダー: 電源トグル(左) と RESET(右) を離して配置 */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+        <PowerToggle enabled={enabled} onToggle={onToggleEnabled} color="#8b5cf6" />
+        <button
+          onClick={() => onChange({ ...DEFAULT_COMP })}
+          style={{ ...btnBase, background: 'rgba(255,255,255,0.08)', color: '#94a3b8' }}
+          title="コンプをデフォルト値にリセット"
+        >RESET</button>
+      </div>
+      <div style={{ opacity: enabled ? 1 : 0.4, pointerEvents: enabled ? 'auto' : 'none' }}>
+        {row('Threshold', comp.threshold, -60, 0, 1, 'dB', 'threshold', v => `${v}dB`)}
+        {row('Ratio',     comp.ratio,     1,   20, 0.5, ':1', 'ratio',     v => `${v}:1`)}
+        {row('Attack',    comp.attack,    0.0, 1.0, 0.001, 's', 'attack',  v => `${(v * 1000).toFixed(0)}ms`)}
+        {row('Release',   comp.release,   0.0, 2.0, 0.01,  's', 'release', v => `${(v * 1000).toFixed(0)}ms`)}
+        {row('Knee',      comp.knee,      0,   40,  1,    'dB', 'knee',    v => `${v}dB`)}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: 8 }}>
         <span style={{ width: 80, fontSize: '0.8rem', color: '#ef4444', textAlign: 'right', fontWeight: 'bold' }}>GR METER</span>
         <GRMeter getGR={getGR} />
       </div>
@@ -304,9 +391,20 @@ function EffectWindow({
       
       <div>
         {isEQ ? (
-          <EQSection eq={state.eq} onChange={eq => onChange({ ...state, eq })} />
+          <EQSection
+            eq={state.eq}
+            enabled={state.eqEnabled !== false}
+            onChange={eq => onChange({ ...state, eq })}
+            onToggleEnabled={() => onChange({ ...state, eqEnabled: state.eqEnabled === false })}
+          />
         ) : (
-          <CompSection comp={state.comp} getGR={getGRLevel} onChange={comp => onChange({ ...state, comp })} />
+          <CompSection
+            comp={state.comp}
+            enabled={state.compEnabled !== false}
+            getGR={getGRLevel}
+            onChange={comp => onChange({ ...state, comp })}
+            onToggleEnabled={() => onChange({ ...state, compEnabled: state.compEnabled === false })}
+          />
         )}
       </div>
     </div>
@@ -436,8 +534,12 @@ function ChannelStrip({
     onAudioOffsetChange(0, true);
   };
 
-  const sectionBtn = (label: string, type: 'eq' | 'comp', accentColor: string) => {
+  const sectionBtn = (label: string, type: 'eq' | 'comp', accentColor: string, enabled: boolean) => {
     const active = activeEffect === type;
+    // active=設定画面を開いている / enabled=エフェクトが有効(チェーンに効いている)
+    const bg = active ? accentColor : (enabled ? `${accentColor}26` : 'rgba(255,255,255,0.05)');
+    const fg = active ? '#fff' : (enabled ? accentColor : '#64748b');
+    const bd = active ? accentColor : (enabled ? `${accentColor}80` : '#334155');
     return (
       <button
         onClick={() => onOpenEffect(type)}
@@ -447,9 +549,9 @@ function ChannelStrip({
           fontSize: '0.6rem',
           fontWeight: 'bold',
           letterSpacing: '0.05em',
-          background: active ? accentColor : 'rgba(255,255,255,0.05)',
-          color: active ? '#fff' : '#94a3b8',
-          border: `1px solid ${active ? accentColor : '#334155'}`,
+          background: bg,
+          color: fg,
+          border: `1px solid ${bd}`,
           borderRadius: 4,
           cursor: 'pointer',
           transition: 'all 0.15s',
@@ -495,8 +597,8 @@ function ChannelStrip({
 
       {/* Effects */}
       <div style={{ padding: '3px 4px', display: 'flex', flexDirection: 'column', gap: 4, borderBottom: '1px solid #1e293b' }}>
-        {sectionBtn('EQ', 'eq', '#3b82f6')}
-        {sectionBtn('COMP', 'comp', '#8b5cf6')}
+        {sectionBtn('EQ', 'eq', '#3b82f6', state.eqEnabled !== false)}
+        {sectionBtn('COMP', 'comp', '#8b5cf6', state.compEnabled !== false)}
       </div>
 
       {/* PAN & MONO */}
@@ -531,7 +633,7 @@ function ChannelStrip({
             onMouseDown={handleAudioOffsetMouseDown}
             onDoubleClick={handleAudioOffsetDoubleClick}
             style={{
-              fontSize: '0.65rem',
+              fontSize: '0.78rem',
               color: isLocked ? '#94a3b8' : '#eab308',
               background: isLocked ? 'rgba(255,255,255,0.05)' : 'rgba(234, 179, 8, 0.1)',
               border: isLocked ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(234, 179, 8, 0.3)',
@@ -755,7 +857,7 @@ export function MixerModal({ tracks, masterState, onUpdateAudioState, onUpdateMa
               color="#f43f5e"
               state={masterState}
               activeEffect={activeEffect?.trackId === 'MASTER' ? activeEffect.type : null}
-              getVULevel={() => audioEngine.getMasterMeterLevel()}
+              getVULevel={() => audioEngine.getMasterMeterLevel(masterState.isMono)}
               onChange={s => onUpdateMasterState(s)}
               onOpenEffect={type => setActiveEffect(prev => prev?.trackId === 'MASTER' && prev.type === type ? null : { trackId: 'MASTER', type })}
               showSolo={false}

@@ -592,6 +592,15 @@ pub struct CutPointPayload {
     pub transition_duration: f32,
 }
 
+#[derive(Deserialize, Debug, Clone)]
+pub struct CompPayload {
+    pub threshold: f32, // dB
+    pub ratio: f32,
+    pub attack: f32,    // 秒
+    pub release: f32,   // 秒
+    pub knee: f32,      // dB
+}
+
 #[derive(Deserialize, Debug)]
 pub struct TrackAudioStatePayload {
     pub volume: f32,
@@ -600,6 +609,30 @@ pub struct TrackAudioStatePayload {
     pub is_mono: bool,
     #[serde(rename = "isMuted")]
     pub is_muted: bool,
+    #[serde(default)]
+    pub eq: Vec<f32>, // 各バンドのゲイン(dB)。インデックスは EQ_BANDS と対応
+    #[serde(rename = "eqEnabled", default)]
+    pub eq_enabled: bool,
+    #[serde(default)]
+    pub comp: Option<CompPayload>,
+    #[serde(rename = "compEnabled", default)]
+    pub comp_enabled: bool,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct MasterStatePayload {
+    pub volume: f32,
+    pub pan: f32,
+    #[serde(rename = "isMono")]
+    pub is_mono: bool,
+    #[serde(default)]
+    pub eq: Vec<f32>,
+    #[serde(rename = "eqEnabled", default)]
+    pub eq_enabled: bool,
+    #[serde(default)]
+    pub comp: Option<CompPayload>,
+    #[serde(rename = "compEnabled", default)]
+    pub comp_enabled: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -640,6 +673,47 @@ pub struct ExportPayload {
     pub tracks: Vec<TrackDataPayload>,
     pub cuts: Vec<CutPointPayload>,
     pub settings: ExportSettings,
+    #[serde(default)]
+    pub master: Option<MasterStatePayload>,
+}
+
+// EQ バンド定義（周波数, タイプ, Q）。
+// ※ フロントエンド src/AudioEngine.ts の EQ_BANDS と必ず一致させること。
+//   インデックスが audio_state.eq（ゲイン配列）と対応する。
+const EQ_BANDS: &[(f32, &str, f32)] = &[
+    (50.0,   "lowshelf",  0.7),
+    (120.0,  "peaking",   1.0),
+    (300.0,  "peaking",   1.0),
+    (700.0,  "peaking",   1.0),
+    (1600.0, "peaking",   1.0),
+    (3500.0, "peaking",   1.0),
+    (7000.0, "highshelf", 0.7),
+];
+
+/// EQ ゲイン配列から FFmpeg 音声フィルタ片（カンマ区切り）を生成する。有効なバンドのみ。
+fn build_eq_filter(eq: &[f32]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for (i, &(freq, ftype, q)) in EQ_BANDS.iter().enumerate() {
+        let g = eq.get(i).copied().unwrap_or(0.0);
+        if g.abs() < 0.05 { continue; } // ほぼ0dBのバンドはスキップ
+        match ftype {
+            "lowshelf"  => parts.push(format!("bass=g={:.2}:f={:.0}", g, freq)),
+            "highshelf" => parts.push(format!("treble=g={:.2}:f={:.0}", g, freq)),
+            _           => parts.push(format!("equalizer=f={:.0}:t=q:w={:.2}:g={:.2}", freq, q, g)),
+        }
+    }
+    parts.join(",")
+}
+
+/// Web Audio DynamicsCompressor 相当のパラメータを FFmpeg acompressor へ変換する。
+/// threshold は dB→linear、attack/release は秒→ms に変換する。
+/// （knee の単位は互換性がないため FFmpeg 既定値に任せる。完全一致ではなく近似）
+fn build_comp_filter(c: &CompPayload) -> String {
+    let thr_lin = 10f32.powf(c.threshold / 20.0).clamp(0.000977, 1.0);
+    let ratio = c.ratio.clamp(1.0, 20.0);
+    let atk = (c.attack * 1000.0).clamp(0.01, 2000.0);
+    let rel = (c.release * 1000.0).clamp(0.01, 9000.0);
+    format!("acompressor=threshold={:.6}:ratio={:.2}:attack={:.2}:release={:.2}", thr_lin, ratio, atk, rel)
 }
 
 fn detect_best_encoder(ffmpeg: &str) -> String {
@@ -896,8 +970,9 @@ async fn export_video(app_handle: tauri::AppHandle, payload: ExportPayload) -> R
     for (i, track) in payload.tracks.iter().enumerate() {
         if track.audio_state.is_muted { continue; }
 
-        let vol = track.audio_state.volume;
-        let mut af = format!("[{}:a]", i);
+        let st = &track.audio_state;
+        // フィルタ段を順に積む（Web Audio の chain 順: comp -> EQ -> volume -> pan に合わせる）
+        let mut stages: Vec<String> = Vec::new();
 
         // 出力タイムライン(0始まり)上での音声遅延を計算する。
         // use_trim 時は入力を range_start 付近までシーク済みなので、残差 = audio_offset 相当になる。
@@ -909,28 +984,43 @@ async fn export_video(app_handle: tauri::AppHandle, payload: ExportPayload) -> R
         };
         let offset_ms = (applied_offset * 1000.0).round() as i64;
         if offset_ms > 0 {
-            af.push_str(&format!("adelay={}|{},", offset_ms, offset_ms));
+            stages.push(format!("adelay={}|{}", offset_ms, offset_ms));
         } else if offset_ms < 0 {
-            af.push_str(&format!("atrim=start={:.3},asetpts=PTS-STARTPTS,", -applied_offset));
+            stages.push(format!("atrim=start={:.3}", -applied_offset));
+            stages.push("asetpts=PTS-STARTPTS".to_string());
         }
 
-        af.push_str(&format!("volume={:.2}", vol));
-
-        if track.audio_state.is_mono {
-            af.push_str(",aformat=channel_layouts=mono");
+        // コンプ（Web Audio では source 直後。生レベルに対して掛ける）
+        if st.comp_enabled {
+            if let Some(c) = &st.comp {
+                stages.push(build_comp_filter(c));
+            }
         }
 
-        let pan = track.audio_state.pan;
+        // EQ
+        if st.eq_enabled {
+            let eqf = build_eq_filter(&st.eq);
+            if !eqf.is_empty() { stages.push(eqf); }
+        }
+
+        // パン（Web Audio: panner はフェーダーの前）
+        let pan = st.pan;
         if pan.abs() > 0.01 {
             let left_gain = if pan > 0.0 { 1.0 - pan } else { 1.0 };
             let right_gain = if pan < 0.0 { 1.0 + pan } else { 1.0 };
-            af.push_str(&format!(",pan=stereo|c0={:.2}*c0|c1={:.2}*c1", left_gain, right_gain));
+            stages.push(format!("pan=stereo|c0={:.2}*c0|c1={:.2}*c1", left_gain, right_gain));
         }
 
+        // モノ
+        if st.is_mono {
+            stages.push("aformat=channel_layouts=mono".to_string());
+        }
+
+        // 音量（フェーダーはチャンネルストリップの最後）
+        stages.push(format!("volume={:.2}", st.volume));
+
         let label = format!("[a{}]", i);
-        af.push_str(&label);
-        filter_complex.push_str(&af);
-        filter_complex.push(';');
+        filter_complex.push_str(&format!("[{}:a]{}{};", i, stages.join(","), label));
 
         amix_labels.push(label);
     }
@@ -956,6 +1046,39 @@ async fn export_video(app_handle: tauri::AppHandle, payload: ExportPayload) -> R
         ));
         a_label = "[atrim]".to_string();
     }
+
+    // マスターチャンネル処理（Web Audio: sum -> EQ -> pan -> comp -> fader(mono+volume) の順）
+    // フェーダー(音量)はチェーンの最後。マスターコンプはプリフェーダー。
+    if let Some(m) = &payload.master {
+        let mut stages: Vec<String> = Vec::new();
+        if m.eq_enabled {
+            let eqf = build_eq_filter(&m.eq);
+            if !eqf.is_empty() { stages.push(eqf); }
+        }
+        let pan = m.pan;
+        if pan.abs() > 0.01 {
+            let lg = if pan > 0.0 { 1.0 - pan } else { 1.0 };
+            let rg = if pan < 0.0 { 1.0 + pan } else { 1.0 };
+            stages.push(format!("pan=stereo|c0={:.2}*c0|c1={:.2}*c1", lg, rg));
+        }
+        if m.comp_enabled {
+            if let Some(c) = &m.comp {
+                stages.push(build_comp_filter(c));
+            }
+        }
+        // モノ → 音量（フェーダー）をチェーン最後に
+        if m.is_mono {
+            stages.push("aformat=channel_layouts=mono".to_string());
+        }
+        if (m.volume - 1.0).abs() > 0.01 {
+            stages.push(format!("volume={:.2}", m.volume));
+        }
+        if !stages.is_empty() {
+            filter_complex.push_str(&format!("{}{}[amaster];", a_label, stages.join(",")));
+            a_label = "[amaster]".to_string();
+        }
+    }
+
     // ラウドネス正規化（loudnorm は内部で 192kHz 出力になり AAC が開けないため、出力側 -ar で 48kHz に戻す）
     if payload.settings.loudnorm {
         filter_complex.push_str(&format!("{}loudnorm=I=-14:LRA=11:TP=-1.0[aout]", a_label));

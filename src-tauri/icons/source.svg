@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <clipPath id="cc">
+      <rect x="60" y="73" width="392" height="104" rx="12"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="80" fill="#0f172a"/>
+
+  <!-- Board body -->
+  <rect x="60" y="197" width="392" height="242" rx="14" fill="#1e293b"/>
+  <rect x="60" y="197" width="392" height="242" rx="14" fill="none" stroke="#1e3a5f" stroke-width="4"/>
+
+  <!-- Hinge bar -->
+  <rect x="56" y="177" width="400" height="24" rx="6" fill="#1e3a5f"/>
+  <circle cx="96" cy="189" r="10" fill="#3b82f6"/>
+  <circle cx="416" cy="189" r="10" fill="#3b82f6"/>
+
+  <!-- Clapper bar (background) -->
+  <rect x="60" y="73" width="392" height="104" rx="12" fill="#111827"/>
+
+  <!-- White diagonal stripes -->
+  <g clip-path="url(#cc)">
+    <polygon points="0,73 35,73 139,177 104,177"   fill="#f1f5f9"/>
+    <polygon points="70,73 105,73 209,177 174,177"  fill="#f1f5f9"/>
+    <polygon points="140,73 175,73 279,177 244,177" fill="#f1f5f9"/>
+    <polygon points="210,73 245,73 349,177 314,177" fill="#f1f5f9"/>
+    <polygon points="280,73 315,73 419,177 384,177" fill="#f1f5f9"/>
+    <polygon points="350,73 385,73 489,177 454,177" fill="#f1f5f9"/>
+    <polygon points="420,73 455,73 559,177 524,177" fill="#f1f5f9"/>
+  </g>
+
+  <!-- Clapper border -->
+  <rect x="60" y="73" width="392" height="104" rx="12" fill="none" stroke="#1e3a5f" stroke-width="4"/>
+</svg>

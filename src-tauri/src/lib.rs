@@ -539,6 +539,9 @@ async fn generate_proxy_video(
             "-vf".to_string(), vf_arg,
             "-c:a".to_string(), "aac".to_string(),
             "-b:a".to_string(), "128k".to_string(),
+            // 出力先が .tmp 拡張子なので、FFmpeg が拡張子からフォーマットを判定できない。
+            // -f mp4 を明示しないと "Unable to find a suitable output format" で失敗する。
+            "-f".to_string(), "mp4".to_string(),
             "-progress".to_string(), "pipe:1".to_string(),
             tmp_proxy_path_str.clone()
         ]);
@@ -546,13 +549,23 @@ async fn generate_proxy_video(
         let mut child = new_command(&ffmpeg)
             .args(&ffmpeg_args)
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("FFmpeg実行失敗: {}", e))?;
 
+        // stderr は別スレッドで吸い出しておく（パイプが詰まってデッドロックしないように）
+        let stderr = child.stderr.take().unwrap();
+        let stderr_handle = std::thread::spawn(move || {
+            use std::io::Read;
+            let mut s = String::new();
+            let mut r = stderr;
+            let _ = r.read_to_string(&mut s);
+            s
+        });
+
         let stdout = child.stdout.take().unwrap();
         let reader = BufReader::new(stdout);
-        
+
         for line in reader.lines() {
             let line = line.unwrap_or_default();
             if line.starts_with("out_time_us=") {
@@ -571,9 +584,13 @@ async fn generate_proxy_video(
             let _ = std::fs::remove_file(&tmp_proxy_path);
             format!("FFmpeg wait error: {}", e)
         })?;
+        let stderr_text = stderr_handle.join().unwrap_or_default();
         if !status.success() {
             let _ = std::fs::remove_file(&tmp_proxy_path);
-            return Err("プロキシ動画の生成に失敗しました。ファイルが破損しているか、未対応の形式です。".to_string());
+            // FFmpeg の実エラー（stderr 末尾）を含めて返す（原因特定用）
+            let tail: String = stderr_text.lines().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+            eprintln!("[proxy] FFmpeg failed for {}:\n{}", video_path, stderr_text);
+            return Err(format!("プロキシ動画の生成に失敗しました:\n{}", tail));
         }
 
         // 成功時のみ一時ファイルを正式パスへリネーム

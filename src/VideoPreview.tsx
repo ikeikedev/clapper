@@ -21,6 +21,7 @@ interface VideoPreviewProps {
   onSyncStateChange?: (isSyncing: boolean) => void;
   onSetExportStart?: () => void;
   onSetExportEnd?: () => void;
+  isRangePreview?: boolean;
 }
 
 export function VideoPreview({ 
@@ -39,7 +40,8 @@ export function VideoPreview({
   onForceAddCut,
   onSyncStateChange,
   onSetExportStart,
-  onSetExportEnd
+  onSetExportEnd,
+  isRangePreview = false
 }: VideoPreviewProps) {
   const videoRefs = useRef<{ [id: string]: HTMLVideoElement | null }>({});
   const [videoError, setVideoError] = React.useState<string | null>(null);
@@ -213,10 +215,11 @@ export function VideoPreview({
     });
   }, [tracks, isGridView]);
 
-  // プレビュー再生時のボリュームに対するフェードイン・フェードアウトの適用
+  // 始点/終点プレビュー再生時のみ、ボリュームに対するフェードイン・フェードアウトを適用する
+  // （通常再生やカットプレビューでは書き出し範囲のフェードを反映しない）
   React.useEffect(() => {
     let targetVolume = masterVolume;
-    if (exportRange && exportRange.useRange) {
+    if (isRangePreview && exportRange && exportRange.useRange) {
       if (exportRange.fadeIn && exportRange.fadeInDuration) {
         const start = exportRange.start;
         const dur = exportRange.fadeInDuration;
@@ -235,7 +238,7 @@ export function VideoPreview({
       }
     }
     audioEngine.setMasterVolume(targetVolume);
-  }, [currentTime, masterVolume, exportRange]);
+  }, [currentTime, masterVolume, exportRange, isRangePreview]);
 
   const prevDraggingOffset = useRef(false);
   const lastShouldVideoBePlaying = useRef<{ [id: string]: boolean }>({});
@@ -1084,8 +1087,8 @@ export function VideoPreview({
             boxShadow: '0 4px 6px rgba(0,0,0,0.5)'
           };
 
-          // Apply export range opacity adjustments in main view
-          if (isMainView && isActive && exportRange?.useRange) {
+          // Apply export range opacity adjustments in main view（始点/終点プレビュー再生時のみ）
+          if (isMainView && isActive && isRangePreview && exportRange?.useRange) {
             let overlayOpacity = 1.0;
             if (exportRange.fadeIn && exportRange.fadeInDuration) {
               const start = exportRange.start;

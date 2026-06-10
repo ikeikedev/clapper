@@ -114,6 +114,9 @@ function App() {
   const isVideoSyncingRef = useRef(false);
 
   const handleTimeChange = (time: number | ((prev: number) => number)) => {
+    // 始点/終点プレビュー以外への明示的なシークでは、書き出し範囲のフェード/自動停止を解除する。
+    // 始点/終点プレビューを開始する handlePreviewFrom 側で、この呼び出しの直後に true へ戻す。
+    isRangePreviewRef.current = false;
     isSeekingRef.current = true;
     if (seekTimeoutRef.current) {
       window.clearTimeout(seekTimeoutRef.current);
@@ -121,6 +124,16 @@ function App() {
     seekTimeoutRef.current = window.setTimeout(() => {
       isSeekingRef.current = false;
     }, 400);
+
+    // 再生中のジャンプでは、まず Web Audio エンジンを内部的に pause する。
+    // playback.seek() は再生中だと即座に新位置でアンカーを貼り直して鳴り始めてしまい、
+    // 映像側の協調リシンク（最大500ms）が追いつくまで音声だけ先行して聞こえてしまう。
+    // ここで pause しておけば playback.playing が false になり、協調リシンク完了時の
+    // 一斉 play(current)（VideoPreview側）に音声開始が委ねられ、停止中からのプレビューと
+    // 同じ「準備が整ってから一斉に鳴り始める」動きになる。
+    if (audioEngine.playback.playing) {
+      audioEngine.playback.pause();
+    }
 
     // Web Audio チャンク再生エンジンへシークを通知（再生中なら即座に組み直し、停止中なら次回再生位置を更新）
     if (typeof time === 'function') {
@@ -215,8 +228,28 @@ function App() {
 
   const duration = tracks.length > 0 ? Math.max(...tracks.map(t => (t.peaks.length / 50) + Math.abs(t.offsetSeconds))) : 100;
 
-  const handleUpdateAudioState = (id: string, newState: any) => {
-    setTracks(prev => prev.map(t => t.id === id ? { ...t, audioState: newState } : t));
+  // commit=true（デフォルト）の場合のみ Undo 履歴に積む。
+  // フェーダー等のドラッグ中は commit=false で連続呼び出しし、
+  // ドラッグ終了時に commit=true で1回だけ履歴に積む。
+  // ※ pushHistory は setTracks の updater 内では呼ばない
+  //   （StrictMode下でupdaterが2回実行され、履歴が二重に積まれてしまうため）。
+  const handleUpdateAudioState = (id: string, newState: any, commit: boolean = true) => {
+    const next = tracks.map(t => t.id === id ? { ...t, audioState: newState } : t);
+    setTracks(next);
+    if (commit) pushHistory(next, cuts);
+  };
+
+  // 複数トラックの audioState を1回の setTracks/pushHistory にまとめて適用する。
+  // ソロ切り替えのように「全トラックを順に onUpdateAudioState する」と、各呼び出しが
+  // 同じ古い tracks を基準に next を作るため最後の呼び出し以外の変更が消えてしまう
+  // （handleUpdateAudioState は updater 内で pushHistory しない設計のため）。
+  const handleUpdateMultipleAudioStates = (updates: { id: string; newState: any }[], commit: boolean = true) => {
+    const next = tracks.map(t => {
+      const u = updates.find(u => u.id === t.id);
+      return u ? { ...t, audioState: u.newState } : t;
+    });
+    setTracks(next);
+    if (commit) pushHistory(next, cuts);
   };
 
   const handleUpdateColorState = (trackId: string, updates: Partial<ColorState>) => {
@@ -655,11 +688,16 @@ function App() {
     }
   }, [isPlaying]);
 
+  // 始点/終点プレビュー再生中かどうか。true の間だけ「終点での自動停止」と
+  // 書き出し範囲のフェードイン/フェードアウトを適用する（通常再生やカット
+  // プレビューでは書き出し範囲設定の影響を受けない）。
+  const isRangePreviewRef = useRef(false);
+
   const shouldAutoStopRef = useRef(false);
   useEffect(() => {
     if (isPlaying) {
       const range = exportRangeRef.current;
-      shouldAutoStopRef.current = range.useRange && currentTimeRef.current < range.end;
+      shouldAutoStopRef.current = isRangePreviewRef.current && range.useRange && currentTimeRef.current < range.end;
     } else {
       shouldAutoStopRef.current = false;
     }
@@ -976,14 +1014,12 @@ function App() {
       });
       
       const roundedOffset = Math.round(offset * 1000) / 1000;
-      
-      setTracks(prev => {
-        const next = prev.map(t =>
-          t.id === trackId ? { ...t, offsetSeconds: roundedOffset, lastAutoSyncedOffset: roundedOffset } : t
-        );
-        pushHistory(next, cuts);
-        return next;
-      });
+
+      const next = tracks.map(t =>
+        t.id === trackId ? { ...t, offsetSeconds: roundedOffset, lastAutoSyncedOffset: roundedOffset } : t
+      );
+      setTracks(next);
+      pushHistory(next, cuts);
       // 再生エンジンへ通知（= offset + 音声ディレイ）
       audioEngine.playback.setTrackOffset(trackId, roundedOffset + (targetTrack.audioOffsetSeconds || 0));
       setStatusText(`${targetTrack.name} の同期完了 (ズレ: ${roundedOffset > 0 ? '+' : ''}${roundedOffset.toFixed(3)}s)`);
@@ -1032,23 +1068,21 @@ function App() {
       });
       
       const results = await Promise.all(syncPromises);
-      
-      setTracks(prev => {
-        const next = prev.map(t => {
-          const res = results.find(r => r.id === t.id);
-          if (res && res.success) {
-            successCount++;
-            // 再生エンジンへ通知（= offset + 音声ディレイ）
-            audioEngine.playback.setTrackOffset(t.id, res.offset + (t.audioOffsetSeconds || 0));
-            return { ...t, offsetSeconds: res.offset, lastAutoSyncedOffset: res.offset };
-          } else if (res) {
-            failCount++;
-          }
-          return t;
-        });
-        pushHistory(next, cuts);
-        return next;
+
+      const next = tracks.map(t => {
+        const res = results.find(r => r.id === t.id);
+        if (res && res.success) {
+          successCount++;
+          // 再生エンジンへ通知（= offset + 音声ディレイ）
+          audioEngine.playback.setTrackOffset(t.id, res.offset + (t.audioOffsetSeconds || 0));
+          return { ...t, offsetSeconds: res.offset, lastAutoSyncedOffset: res.offset };
+        } else if (res) {
+          failCount++;
+        }
+        return t;
       });
+      setTracks(next);
+      pushHistory(next, cuts);
 
       setStatusText(`一括同期完了: 成功 ${successCount}件, 失敗 ${failCount}件`);
     } catch (err) {
@@ -1066,40 +1100,36 @@ function App() {
     setIsDraggingOffset(!commit);
     // 再生エンジンへトラックのコンテンツオフセットを通知（= offset + 音声ディレイ）
     audioEngine.playback.setTrackOffset(trackId, roundedOffset + (targetTrack?.audioOffsetSeconds || 0));
-    setTracks(prev => {
-      const next = prev.map(t => {
-        if (t.id === trackId) {
-          const currentRounded = Math.round(t.offsetSeconds * 1000) / 1000;
-          if (currentRounded === roundedOffset) {
-            return t;
-          }
-          return { ...t, offsetSeconds: roundedOffset, lastAutoSyncedOffset: undefined };
+    const next = tracks.map(t => {
+      if (t.id === trackId) {
+        const currentRounded = Math.round(t.offsetSeconds * 1000) / 1000;
+        if (currentRounded === roundedOffset) {
+          return t;
         }
-        return t;
-      });
-      if (commit) {
-        const hasChanged = prev.some(t => t.id === trackId && (Math.round(t.offsetSeconds * 1000) / 1000) !== roundedOffset);
-        if (hasChanged) {
-          pushHistory(next, cuts);
-          setStatusText(`オフセットを調整しました: ${roundedOffset > 0 ? '+' : ''}${roundedOffset.toFixed(3)}s`);
-        }
+        return { ...t, offsetSeconds: roundedOffset, lastAutoSyncedOffset: undefined };
       }
-      return next;
+      return t;
     });
+    setTracks(next);
+    if (commit) {
+      const hasChanged = tracks.some(t => t.id === trackId && (Math.round(t.offsetSeconds * 1000) / 1000) !== roundedOffset);
+      if (hasChanged) {
+        pushHistory(next, cuts);
+        setStatusText(`オフセットを調整しました: ${roundedOffset > 0 ? '+' : ''}${roundedOffset.toFixed(3)}s`);
+      }
+    }
   };
 
   const handleToggleLockTrack = (trackId: string) => {
-    setTracks(prev => {
-      const next = prev.map(t => 
-        t.id === trackId ? { ...t, isLocked: !t.isLocked } : t
-      );
-      pushHistory(next, cuts);
-      const target = next.find(t => t.id === trackId);
-      if (target) {
-        setStatusText(`${target.name} を${target.isLocked ? 'ロックしました' : 'ロック解除しました'}`);
-      }
-      return next;
-    });
+    const next = tracks.map(t =>
+      t.id === trackId ? { ...t, isLocked: !t.isLocked } : t
+    );
+    setTracks(next);
+    pushHistory(next, cuts);
+    const target = next.find(t => t.id === trackId);
+    if (target) {
+      setStatusText(`${target.name} を${target.isLocked ? 'ロックしました' : 'ロック解除しました'}`);
+    }
   };
 
   const handleTrackNameChange = (trackId: string, newName: string) => {
@@ -1152,26 +1182,24 @@ function App() {
     setIsDraggingOffset(!commit);
     // 再生エンジンへトラックのコンテンツオフセットを通知（= offset + 音声ディレイ）
     audioEngine.playback.setTrackOffset(trackId, (targetTrack?.offsetSeconds || 0) + roundedOffset);
-    setTracks(prev => {
-      const next = prev.map(t => {
-        if (t.id === trackId) {
-          const currentAudioOffset = t.audioOffsetSeconds || 0;
-          if (currentAudioOffset === roundedOffset) {
-            return t;
-          }
-          return { ...t, audioOffsetSeconds: roundedOffset };
+    const next = tracks.map(t => {
+      if (t.id === trackId) {
+        const currentAudioOffset = t.audioOffsetSeconds || 0;
+        if (currentAudioOffset === roundedOffset) {
+          return t;
         }
-        return t;
-      });
-      if (commit) {
-        const hasChanged = prev.some(t => t.id === trackId && (t.audioOffsetSeconds || 0) !== roundedOffset);
-        if (hasChanged) {
-          pushHistory(next, cuts);
-          setStatusText(`音声オフセットを調整しました: ${roundedOffset > 0 ? '+' : ''}${roundedOffset.toFixed(3)}s`);
-        }
+        return { ...t, audioOffsetSeconds: roundedOffset };
       }
-      return next;
+      return t;
     });
+    setTracks(next);
+    if (commit) {
+      const hasChanged = tracks.some(t => t.id === trackId && (t.audioOffsetSeconds || 0) !== roundedOffset);
+      if (hasChanged) {
+        pushHistory(next, cuts);
+        setStatusText(`音声オフセットを調整しました: ${roundedOffset > 0 ? '+' : ''}${roundedOffset.toFixed(3)}s`);
+      }
+    }
   };
 
   const handleDefaultDurationDragMouseDown = (e: React.MouseEvent) => {
@@ -1752,6 +1780,10 @@ function App() {
   const handlePlayPause = async () => {
     // ユーザー操作時にAudioContextを再開する（ブラウザの自動再生ポリシー対応）
     await audioEngine.resume();
+    if (!isPlaying) {
+      // 通常の再生開始（始点/終点プレビューではない）。書き出し範囲のフェード/自動停止は適用しない。
+      isRangePreviewRef.current = false;
+    }
     setIsPlaying(!isPlaying);
   };
 
@@ -1769,7 +1801,9 @@ function App() {
   // 指定位置からプレビュー再生する（始点/終点/カットの▶ボタン共通）。
   // currentTime と isPlaying を同一バッチで更新し、頭出し（シーク）と再生開始の
   // 整合を同期ループ側の「協調リシンク（停止→一斉シーク→ready待ち→一斉再生）」に委ねる。
-  const handlePreviewFrom = async (time: number) => {
+  // rangePreview=true は「始点プレビュー」「終点プレビュー」ボタンからの呼び出しを示す。
+  // この場合のみ、終点での自動停止と書き出し範囲のフェードイン/フェードアウトを適用する。
+  const handlePreviewFrom = async (time: number, rangePreview: boolean = false) => {
     try {
       await audioEngine.resume();
     } catch (e) {
@@ -1778,7 +1812,8 @@ function App() {
     setPreviewOverrideCameraId(null);
     // 頭出し（playback.seek）→ 再生開始（isPlaying→true で playback.play(currentTime)）。
     // チャンク再生はサンプル精度で位置決めされるので、停止状態からでもクリーンに頭出しできる。
-    handleTimeChange(time);
+    handleTimeChange(time); // ここで isRangePreviewRef は一旦 false にリセットされる
+    isRangePreviewRef.current = rangePreview;
     setIsPlaying(true);
   };
 
@@ -2126,6 +2161,7 @@ function App() {
                 masterState={masterState}
                 onClose={() => setActiveTab('cuts')}
                 onUpdateAudioState={handleUpdateAudioState}
+                onUpdateMultipleAudioStates={handleUpdateMultipleAudioStates}
                 onUpdateMasterState={handleUpdateMasterState}
                 activeCameraId={activePreviewCameraId}
                 onUpdateAudioOffset={handleTrackAudioOffsetChange}
@@ -2587,6 +2623,7 @@ function App() {
                 onSyncStateChange={(syncing) => { isVideoSyncingRef.current = syncing; }}
                 onSetExportStart={handleSetExportStartAtCurrentTime}
                 onSetExportEnd={handleSetExportEndAtCurrentTime}
+                isRangePreview={isRangePreviewRef.current}
               />
 
               {/* Floating Volume Overlay - preview-container内の右下に配置 */}
@@ -2951,7 +2988,7 @@ function App() {
                     <button
                       className="btn btn-transport-flat"
                       disabled={!exportRange.useRange}
-                      onClick={() => { handlePreviewFrom(exportRange.start); }}
+                      onClick={() => { handlePreviewFrom(exportRange.start, true); }}
                       style={{
                         padding: 0,
                         width: '22px',
@@ -3099,7 +3136,7 @@ function App() {
                     <button
                       className="btn btn-transport-flat"
                       disabled={!exportRange.useRange}
-                      onClick={() => { handlePreviewFrom(Math.max(0, exportRange.end - 5.0)); }}
+                      onClick={() => { handlePreviewFrom(Math.max(0, exportRange.end - 5.0), true); }}
                       style={{
                         padding: 0,
                         width: '22px',

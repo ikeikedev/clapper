@@ -190,12 +190,12 @@ function PowerToggle({ enabled, onToggle, color }: { enabled: boolean; onToggle:
 function EQSection({ eq, enabled, onChange, onToggleEnabled }: {
   eq: EQState;
   enabled: boolean;
-  onChange: (eq: EQState) => void;
+  onChange: (eq: EQState, commit?: boolean) => void;
   onToggleEnabled: () => void;
 }) {
   // 1バンドだけ変更した新しい配列を返す
   const withBand = (i: number, val: number) => EQ_BANDS.map((_, idx) => idx === i ? val : (eq[idx] ?? 0));
-  const resetAll = () => onChange([...DEFAULT_EQ]);
+  const resetAll = () => onChange([...DEFAULT_EQ], true);
   const btnBase: React.CSSProperties = {
     height: 22, padding: '0 8px', border: 'none', borderRadius: 4,
     fontSize: '0.72rem', fontWeight: 'bold', cursor: 'pointer'
@@ -226,11 +226,12 @@ function EQSection({ eq, enabled, onChange, onToggleEnabled }: {
               <input
                 type="range"
                 orient="vertical"
-                min={-15} max={15} step={0.5}
+                min={-15} max={15} step={1}
                 value={v}
-                onChange={e => onChange(withBand(i, parseFloat(e.target.value)))}
-                onDoubleClick={() => onChange(withBand(i, 0))}
-                onClick={e => { if (e.ctrlKey) onChange(withBand(i, 0)); }}
+                onChange={e => onChange(withBand(i, parseFloat(e.target.value)), false)}
+                onMouseUp={() => onChange(eq, true)}
+                onDoubleClick={() => onChange(withBand(i, 0), true)}
+                onClick={e => { if (e.ctrlKey) onChange(withBand(i, 0), true); }}
                 className="eq-fader"
                 style={{
                   writingMode: 'vertical-lr',
@@ -257,17 +258,18 @@ function CompSection({ comp, enabled, getGR, onChange, onToggleEnabled }: {
   comp: CompState;
   enabled: boolean;
   getGR: () => number;
-  onChange: (comp: CompState) => void;
+  onChange: (comp: CompState, commit?: boolean) => void;
   onToggleEnabled: () => void;
 }) {
   const row = (label: string, value: number, min: number, max: number, step: number, unit: string, key: keyof CompState, fmt?: (v: number) => string) => {
-    const handleReset = () => onChange({ ...comp, [key]: DEFAULT_COMP[key] });
+    const handleReset = () => onChange({ ...comp, [key]: DEFAULT_COMP[key] }, true);
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0' }}>
         <span style={{ width: 80, fontSize: '0.8rem', color: '#94a3b8', textAlign: 'right', fontWeight: 'bold' }}>{label}</span>
         <input
           type="range" min={min} max={max} step={step} value={value}
-          onChange={e => onChange({ ...comp, [key]: parseFloat(e.target.value) })}
+          onChange={e => onChange({ ...comp, [key]: parseFloat(e.target.value) }, false)}
+          onMouseUp={() => onChange(comp, true)}
           onDoubleClick={handleReset}
           onClick={e => { if (e.ctrlKey) handleReset(); }}
           style={{ flex: 1, accentColor: '#8b5cf6', cursor: 'pointer' }}
@@ -289,7 +291,7 @@ function CompSection({ comp, enabled, getGR, onChange, onToggleEnabled }: {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
         <PowerToggle enabled={enabled} onToggle={onToggleEnabled} color="#8b5cf6" />
         <button
-          onClick={() => onChange({ ...DEFAULT_COMP })}
+          onClick={() => onChange({ ...DEFAULT_COMP }, true)}
           style={{ ...btnBase, background: 'rgba(255,255,255,0.08)', color: '#94a3b8' }}
           title="コンプをデフォルト値にリセット"
         >RESET</button>
@@ -323,7 +325,7 @@ function EffectWindow({
   type: 'eq' | 'comp';
   state: TrackAudioState | MasterAudioState;
   getGRLevel: () => number;
-  onChange: (s: any) => void;
+  onChange: (s: any, commit?: boolean) => void;
   onClose: () => void;
 }) {
   const [pos, setPos] = useState({ x: window.innerWidth / 2 - 200, y: window.innerHeight / 2 - 150 });
@@ -394,16 +396,16 @@ function EffectWindow({
           <EQSection
             eq={state.eq}
             enabled={state.eqEnabled !== false}
-            onChange={eq => onChange({ ...state, eq })}
-            onToggleEnabled={() => onChange({ ...state, eqEnabled: state.eqEnabled === false })}
+            onChange={(eq, commit) => onChange({ ...state, eq }, commit)}
+            onToggleEnabled={() => onChange({ ...state, eqEnabled: state.eqEnabled === false }, true)}
           />
         ) : (
           <CompSection
             comp={state.comp}
             enabled={state.compEnabled !== false}
             getGR={getGRLevel}
-            onChange={comp => onChange({ ...state, comp })}
-            onToggleEnabled={() => onChange({ ...state, compEnabled: state.compEnabled === false })}
+            onChange={(comp, commit) => onChange({ ...state, comp }, commit)}
+            onToggleEnabled={() => onChange({ ...state, compEnabled: state.compEnabled === false }, true)}
           />
         )}
       </div>
@@ -413,37 +415,40 @@ function EffectWindow({
 
 // ── Pan Knob ──────────────────────────────────────────────────────────────────
 
-function PanKnob({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+function PanKnob({ value, onChange }: { value: number; onChange: (v: number, commit?: boolean) => void }) {
   const rot = value * 135; // -1 to +1 -> -135deg to +135deg
-  
+
   const handlePointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
     if (e.ctrlKey) {
-      onChange(0);
+      onChange(0, true);
       return;
     }
     const startX = e.clientX;
     const startVal = value;
-    
+    let lastVal = startVal;
+
     const handleMove = (me: PointerEvent) => {
       const deltaX = me.clientX - startX;
       const deltaVal = deltaX * 0.01;
-      onChange(Math.max(-1, Math.min(1, startVal + deltaVal)));
+      lastVal = Math.max(-1, Math.min(1, startVal + deltaVal));
+      onChange(lastVal, false);
     };
-    
+
     const handleUp = () => {
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
+      onChange(lastVal, true);
     };
-    
+
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
   };
 
   return (
-    <div 
+    <div
       onPointerDown={handlePointerDown}
-      onDoubleClick={() => onChange(0)}
+      onDoubleClick={() => onChange(0, true)}
       style={{
         width: 22, height: 22, borderRadius: '50%', background: '#334155', 
         position: 'relative', cursor: 'ew-resize', border: '1.5px solid #1e293b',
@@ -486,7 +491,7 @@ function ChannelStrip({
   state: TrackAudioState | MasterAudioState;
   activeEffect: 'eq' | 'comp' | null;
   getVULevel: () => { l: number, r: number };
-  onChange: (s: any) => void;
+  onChange: (s: any, commit?: boolean) => void;
   onOpenEffect: (type: 'eq' | 'comp') => void;
   showSolo?: boolean;
   onSolo?: () => void;
@@ -604,7 +609,7 @@ function ChannelStrip({
       {/* PAN & MONO */}
       <div style={{ padding: '4px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, borderBottom: '1px solid #1e293b' }}>
         <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-          <PanKnob value={state.pan} onChange={v => onChange({ ...state, pan: v })} />
+          <PanKnob value={state.pan} onChange={(v, commit) => onChange({ ...state, pan: v }, commit)} />
           <span style={{ fontSize: '0.6rem', color: '#64748b', fontWeight: 'bold' }}>
             PAN {state.pan === 0 ? 'C' : `${Math.round(Math.abs(state.pan * 100))}${state.pan > 0 ? 'R' : 'L'}`}
           </span>
@@ -685,9 +690,10 @@ function ChannelStrip({
                 orient="vertical"
                 min={0} max={1} step={0.001}
                 value={faderVal}
-                onChange={e => onChange({ ...state, volume: Math.pow(parseFloat(e.target.value), 3) * (64 / 27) })}
-                onDoubleClick={() => onChange({ ...state, volume: 1.0 })}
-                onClick={e => { if (e.ctrlKey) onChange({ ...state, volume: 1.0 }); }}
+                onChange={e => onChange({ ...state, volume: Math.pow(parseFloat(e.target.value), 3) * (64 / 27) }, false)}
+                onMouseUp={() => onChange(state, true)}
+                onDoubleClick={() => onChange({ ...state, volume: 1.0 }, true)}
+                onClick={e => { if (e.ctrlKey) onChange({ ...state, volume: 1.0 }, true); }}
                 className="mixer-fader"
                 style={{ 
                   writingMode: 'vertical-lr', 
@@ -763,7 +769,8 @@ interface MixerModalProps {
   tracks: TrackData[];
   masterState: MasterAudioState;
   onClose: () => void;
-  onUpdateAudioState: (id: string, newState: TrackAudioState) => void;
+  onUpdateAudioState: (id: string, newState: TrackAudioState, commit?: boolean) => void;
+  onUpdateMultipleAudioStates: (updates: { id: string; newState: TrackAudioState }[], commit?: boolean) => void;
   onUpdateMasterState: (newState: MasterAudioState) => void;
   activeCameraId?: string;
   onUpdateAudioOffset?: (id: string, val: number, commit: boolean) => void;
@@ -771,24 +778,25 @@ interface MixerModalProps {
 
 type ActiveEffect = { trackId: string; type: 'eq' | 'comp' } | null;
 
-export function MixerModal({ tracks, masterState, onUpdateAudioState, onUpdateMasterState, activeCameraId, onUpdateAudioOffset }: MixerModalProps) {
+export function MixerModal({ tracks, masterState, onUpdateAudioState, onUpdateMultipleAudioStates, onUpdateMasterState, activeCameraId, onUpdateAudioOffset }: MixerModalProps) {
   const [activeEffect, setActiveEffect] = useState<ActiveEffect>(null);
 
   const handleSolo = useCallback((soloId: string) => {
     const anyOtherSoloed = tracks.some(t => t.id !== soloId && t.audioState.isSoloed);
     const thisSoloed = tracks.find(t => t.id === soloId)?.audioState.isSoloed;
-    tracks.forEach(t => {
+    const updates = tracks.map(t => {
       const shouldSolo = !anyOtherSoloed && !thisSoloed ? (t.id === soloId) : (t.id === soloId ? !thisSoloed : false);
-      onUpdateAudioState(t.id, { ...t.audioState, isSoloed: shouldSolo });
+      return { id: t.id, newState: { ...t.audioState, isSoloed: shouldSolo } };
     });
-  }, [tracks, onUpdateAudioState]);
+    onUpdateMultipleAudioStates(updates);
+  }, [tracks, onUpdateMultipleAudioStates]);
 
 
   // Resolve active effect state
   let effectTitle = '';
   let effectState: TrackAudioState | MasterAudioState | null = null;
   let effectGRLevel = () => 0;
-  let effectOnChange = (_s: any) => {};
+  let effectOnChange = (_s: any, _commit?: boolean) => {};
 
   if (activeEffect) {
     if (activeEffect.trackId === 'MASTER') {
@@ -802,7 +810,7 @@ export function MixerModal({ tracks, masterState, onUpdateAudioState, onUpdateMa
         effectTitle = t.name;
         effectState = t.audioState;
         effectGRLevel = () => audioEngine.getTrackGRLevel(t.id);
-        effectOnChange = s => onUpdateAudioState(t.id, s);
+        effectOnChange = (s, commit) => onUpdateAudioState(t.id, s, commit);
       } else {
         setActiveEffect(null);
       }
@@ -833,7 +841,7 @@ export function MixerModal({ tracks, masterState, onUpdateAudioState, onUpdateMa
                 state={track.audioState}
                 activeEffect={activeEffect?.trackId === track.id ? activeEffect.type : null}
                 getVULevel={() => audioEngine.getTrackMeterLevel(track.id, track.audioState.isMono)}
-                onChange={s => onUpdateAudioState(track.id, s)}
+                onChange={(s, commit) => onUpdateAudioState(track.id, s, commit)}
                 onOpenEffect={type => setActiveEffect(prev => prev?.trackId === track.id && prev.type === type ? null : { trackId: track.id, type })}
                 showSolo={true}
                 onSolo={() => handleSolo(track.id)}

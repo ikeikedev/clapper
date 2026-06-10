@@ -1048,7 +1048,7 @@ async fn export_video(app_handle: tauri::AppHandle, payload: ExportPayload) -> R
         for label in &amix_labels {
             filter_complex.push_str(label);
         }
-        filter_complex.push_str(&format!("amix=inputs={}:duration=longest[amixed];", amix_labels.len()));
+        filter_complex.push_str(&format!("amix=inputs={}:duration=longest:normalize=0[amixed];", amix_labels.len()));
     }
 
     // 範囲指定があれば 0..range_dur に揃える（入力シーク済みなので開始は概ね0、終端を確定させる）
@@ -1224,6 +1224,9 @@ async fn export_video(app_handle: tauri::AppHandle, payload: ExportPayload) -> R
             }
             Some("lossless") => {
                 a.push("-c:a".into()); a.push("alac".into());
+                if payload.settings.loudnorm {
+                    a.push("-ar".into()); a.push("48000".into());
+                }
             }
             _ => {
                 a.push("-c:a".into()); a.push("aac".into());

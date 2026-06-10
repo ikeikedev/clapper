@@ -277,7 +277,19 @@ export function ExportModal({
         fadeOutDuration: useRange ? exportRange.fadeOutDuration : 0.5,
       };
 
-      const payload: ExportPayload = { tracks, cuts, settings, master: masterState };
+      // ソロ状態を書き出しに反映: ソロ中のトラックがあれば実効的にミュート状態に変換する
+      const anySoloed = tracks.some(t => t.audioState.isSoloed);
+      const exportTracks = anySoloed
+        ? tracks.map(t => ({
+            ...t,
+            audioState: {
+              ...t.audioState,
+              isMuted: !t.audioState.isSoloed
+            }
+          }))
+        : tracks;
+
+      const payload: ExportPayload = { tracks: exportTracks, cuts, settings, master: masterState };
 
       unlisten = await listen<number>('export-progress', event => {
         setProgress(event.payload);

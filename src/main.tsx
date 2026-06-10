@@ -68,6 +68,19 @@ window.addEventListener('contextmenu', (e) => {
   e.preventDefault();
 });
 
+// WebView2 に残っているブラウザ用ショートカットを無効化する。
+// 特に F5 / Ctrl+R のリロードは、未保存のプロジェクト状態が警告なしに全て消えるため必ず抑止する。
+// Ctrl+F / F3（検索バー）、Ctrl+P（印刷）、F7（カーソルブラウズ）もアプリでは不要なので併せて無効化。
+// テキスト編集系（Ctrl+C/V/X/Z など）はここでは触らない。
+window.addEventListener('keydown', (e) => {
+  const key = e.key.toLowerCase();
+  const isReload = key === 'f5' || ((e.ctrlKey || e.metaKey) && key === 'r');
+  const isBrowserUi = key === 'f3' || key === 'f7' || ((e.ctrlKey || e.metaKey) && (key === 'f' || key === 'p'));
+  if (isReload || isBrowserUi) {
+    e.preventDefault();
+  }
+});
+
 window.addEventListener('error', (e) => {
   console.error("GLOBAL ERROR:", e.error);
   const div = document.createElement('div');

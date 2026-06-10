@@ -360,6 +360,19 @@ function App() {
     return () => { if (unlisten) unlisten(); };
   }, []);
 
+  // WebView のリロード・ページ離脱に対する最終ガード（F5/Ctrl+R 自体は main.tsx で抑止済み）。
+  // 何らかの経路でリロードが走っても、未保存変更があれば確認ダイアログを挟む。
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (isDirtyRef.current) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, []);
+
   // ウィンドウタイトルに編集中ファイル名と未保存マーク(*)を反映する（タスクバー/Alt+Tab 用）
   useEffect(() => {
     if (!appWindow) return;

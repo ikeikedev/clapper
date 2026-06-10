@@ -116,7 +116,10 @@ function App() {
   const handleTimeChange = (time: number | ((prev: number) => number)) => {
     // 始点/終点プレビュー以外への明示的なシークでは、書き出し範囲のフェード/自動停止を解除する。
     // 始点/終点プレビューを開始する handlePreviewFrom 側で、この呼び出しの直後に true へ戻す。
+    // shouldAutoStopRef も併せて解除する（[isPlaying] の useEffect は再生中のシークでは
+    // 発火しないため、ここで解除しないと範囲プレビュー中の手動シーク後も終点で止まり続ける）。
     isRangePreviewRef.current = false;
+    shouldAutoStopRef.current = false;
     isSeekingRef.current = true;
     if (seekTimeoutRef.current) {
       window.clearTimeout(seekTimeoutRef.current);
@@ -1825,8 +1828,15 @@ function App() {
     setPreviewOverrideCameraId(null);
     // 頭出し（playback.seek）→ 再生開始（isPlaying→true で playback.play(currentTime)）。
     // チャンク再生はサンプル精度で位置決めされるので、停止状態からでもクリーンに頭出しできる。
-    handleTimeChange(time); // ここで isRangePreviewRef は一旦 false にリセットされる
+    handleTimeChange(time); // ここで isRangePreviewRef / shouldAutoStopRef は一旦 false にリセットされる
     isRangePreviewRef.current = rangePreview;
+    // 自動停止フラグはここで直接武装する。[isPlaying] の useEffect 任せにすると、
+    // 「再生中に始点/終点プレビューを押した」場合に isPlaying が true→true で変化せず
+    // effect が発火しないため、終点で止まらないバグになる（停止中からは正常に止まる）。
+    {
+      const range = exportRangeRef.current;
+      shouldAutoStopRef.current = rangePreview && range.useRange && time < range.end;
+    }
     setIsPlaying(true);
   };
 

@@ -304,12 +304,7 @@ export function ExportModal({
       await invoke('export_video', { payload });
       setStatusMsg('エンコード完了！');
       setProgress(100);
-      // 書き出し完了後、出力フォルダをエクスプローラーで開く（ファイルを選択状態で）
-      try {
-        await invoke('reveal_in_explorer', { path: savePath });
-      } catch (e) {
-        console.error('フォルダを開けませんでした', e);
-      }
+      // フォルダは自動では開かない（完了画面の「出力フォルダを開く」ボタンに委ねる）
     } catch (err) {
       console.error(err);
       // ユーザーがキャンセルした場合は「エラー」ではなく設定画面へ戻す

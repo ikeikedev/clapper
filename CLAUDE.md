@@ -38,7 +38,7 @@ multicam-sync-editor/
 │   ├── PreferencesModal.tsx   # 環境設定 UI
 │   └── types.ts               # 共有型定義
 ├── src-tauri/
-│   ├── src/lib.rs             # Tauri コマンド全実装（約1080行）
+│   ├── src/lib.rs             # Tauri コマンド全実装（約1630行）
 │   └── tauri.conf.json        # アプリ設定（1400x900、decorations: false）
 ├── ffmpeg.exe                 # バンドル済み FFmpeg バイナリ
 └── CLAUDE.md                  # このファイル
@@ -52,7 +52,6 @@ multicam-sync-editor/
 - **マルチトラック管理** — REF（基準）トラック + 複数カメラアングル
 - **自動同期** — Rust 側で FFT 相互相関によりオーディオオフセットを秒単位で算出（250Hz エンベロープ + 40Hz HP / 3kHz LP フィルタ）
 - **エンベロープキャッシュ** — `OnceLock<Mutex<HashMap>>` によりセッション中の再計算を回避
-- **プロキシ動画生成** — libx264 superfast で 720p/480p/360p の低解像度プロキシを非同期生成、進捗は `proxy-progress` イベントで通知
 - **プロジェクト保存/読込** — JSON 形式（`tracks`, `cuts`, `exportRange`）
 
 ### タイムライン
@@ -63,9 +62,10 @@ multicam-sync-editor/
 - 再生ヘッドの自動スクロール（閾値/目標位置を Preferences で調整可）
 
 ### 音声処理（Web Audio API）
-トラックごとのチェーン: `MediaElementSource → Compressor → 5バンドEQ → StereoPanner → Gain → MasterGain`
+トラックごとのチェーン: `MediaElementSource → Compressor → 7バンドEQ → StereoPanner → Gain → MasterGain`
 マスターチェーン: `MasterGain → MasterEQ → MasterComp → MonitorGain → destination`
 VU メーター（L/R）、GR メーター（コンプ GainReduction）付き
+DAW 式チャンク再生エンジン（PlaybackEngine.ts）により、10 秒単位での AudioBufferSourceNode スケジューリングで長時間ドリフト/メモリ一定を実現
 
 ### エクスポート
 - エンコーダ: NVENC / QSV / AMF / libx264
@@ -96,13 +96,18 @@ VU メーター（L/R）、GR メーター（コンプ GainReduction）付き
 
 | コマンド | 用途 |
 |---|---|
-| `extract_audio` | 動画から WAV を抽出（8kHz モノラル、キャッシュあり） |
+| `extract_audio` | 動画から WAV を抽出（8kHz モノラル、FFT用、キャッシュあり） |
+| `extract_playback_audio` | 動画から PCM を抽出（48kHz 可逆、Web Audio 再生用） |
 | `generate_waveform` | WAV から 50pts/秒のピーク配列を生成 |
-| `generate_proxy_video` | 低解像度プロキシ動画を生成（進捗イベント付き） |
 | `calculate_sync_offset` | FFT 相互相関でオフセット秒数を計算 |
-| `export_video` | FFmpeg filter_complex を組み立てて書き出し |
+| `export_video` | FFmpeg filter_complex を組み立てて書き出し（ラウドネス正規化対応） |
+| `cancel_export` | 実行中の export_video をキャンセル |
+| `export_frame` | 指定フレーム時刻の映像をピクセル配列で取得 |
+| `read_pcm_range` | 指定範囲の PCM データを読み込み（再生用） |
 | `save_project_file` | プロジェクト JSON をファイルに書き込み |
 | `load_project_file` | プロジェクト JSON をファイルから読み込み |
+| `check_missing_files` | 複数ファイルの存在確認 |
+| `reveal_in_explorer` | エクスプローラーでファイルを選択表示 |
 
 ---
 
@@ -152,17 +157,14 @@ FFmpeg は `ffmpeg.exe` をプロジェクトルートに置くか、PATH に通
 
 1. **`App.tsx` が約 3100 行** — ロジックは機能ドメインごとにカスタムフックへ分割することが望ましいが、現状はモノリシック
 2. **`README.md` が Vite テンプレートのまま** — プロジェクト固有の内容に差し替えが必要
-3. **`tauri.conf.json` の `identifier`** が `com.tauri.dev` のまま — リリース前に変更要
-4. **`Cargo.toml` の `authors`** が `["you"]` のまま
 
 ---
 
 ## 今後の開発候補タスク（優先度順）
 
 1. `App.tsx` のリファクタリング（カスタムフック分離: `usePlayback`, `useTracks`, `useCuts`, `useHistory`）
-2. タイムライン上での「カットカードのドラッグによるアングル切替」UI 改善
-3. オーディオオフセット（映像オフセットとは独立した音声ズレ補正）のより直感的な UI
-4. プロジェクトファイルのバージョン管理（スキーマバージョンフィールド追加）
-5. `tauri.conf.json` の identifier / 作者情報の正式設定
-6. `README.md` をプロジェクト説明に差し替え
-7. Windows 以外のプラットフォーム対応（現状 `decorations: false` の実装が Windows 前提）
+2. 近距離ジャンプでの音声停止の可能性を精査・修正（VideoPreview シーク条件の見直し）
+3. タイムライン上での「カットカードのドラッグによるアングル切替」UI 改善
+4. オーディオオフセット（映像オフセットとは独立した音声ズレ補正）のより直感的な UI
+5. `README.md` をプロジェクト説明に差し替え
+6. Windows 以外のプラットフォーム対応（現状 `decorations: false` の実装が Windows 前提）

@@ -15,7 +15,7 @@ export interface CompState {
   threshold: number; // dB, -60 to 0
   ratio: number;     // 1 to 20
   attack: number;    // seconds, 0.0 to 1.0
-  release: number;   // seconds, 0.0 to 1.0
+  release: number;   // seconds, 0.0 to 2.0
   knee: number;      // dB, 0 to 40
 }
 

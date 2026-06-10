@@ -236,26 +236,6 @@ class AudioEngine {
     return this.ctx;
   }
 
-  connectVideo(id: string, video: HTMLMediaElement) {
-    if (!this.ctx) this.init();
-    const existingVideo = this.videoElements.get(id);
-    if (existingVideo === video && this.sources.has(id)) return;
-
-    if (this.sources.has(id)) {
-      this.removeTrack(id);
-    }
-
-    try {
-      const source = this.ctx!.createMediaElementSource(video);
-      const { comp } = this.buildTrackChain(id);
-      source.connect(comp);
-      this.sources.set(id, source);
-      this.videoElements.set(id, video);
-    } catch (err) {
-      console.error('Failed to connect audio source for', id, err);
-    }
-  }
-
   updateTrackState(id: string, state: TrackAudioState, anySoloed: boolean = false) {
     const nodes = this.trackNodes.get(id);
     if (!nodes || !this.ctx) return;

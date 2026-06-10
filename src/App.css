@@ -134,16 +134,6 @@ body {
   flex-shrink: 0;
 }
 
-.menu-app-beta {
-  font-size: 0.6rem;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: rgba(59, 130, 246, 0.2);
-  color: #60a5fa;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
 .menu-items {
   display: flex;
   align-items: center;

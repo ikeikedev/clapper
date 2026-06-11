@@ -263,7 +263,12 @@ export class PlaybackEngine {
       t.loadingUntilSec = -1;
       // 続けて先まで予約
       this.ensureScheduled(t);
-    }).catch(() => { t.loadingUntilSec = -1; });
+    }).catch(() => {
+      // 世代チェック: 旧世代の読み込み失敗が新世代の in-flight ガードをクロバーすると、
+      // 同一チャンクの二重読み込み→二重スケジュール（音の二重再生）に発展するため、
+      // 同一世代の失敗時のみクリアして次の tick でリトライさせる。
+      if (gen === t.generation) t.loadingUntilSec = -1;
+    });
   }
 
   // contentStart から CHUNK_SEC ぶん（または末尾まで）の AudioBuffer を読み込む

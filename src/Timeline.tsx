@@ -164,6 +164,18 @@ export function Timeline({
     durationRef.current = duration;
   }, [onTimeChange, onPlayingChange, pixelsPerSecond, duration]);
 
+  // ルーラー/リボン上のホイールはズーム専用にする。React の onWheel はパッシブ登録のため
+  // ハンドラ内の preventDefault が効かず、ズームと同時にコンテナの縦スクロールも発生してしまう
+  // （トラック数が多く縦に溢れているときに顕在化）。ネイティブの non-passive リスナーで
+  // デフォルトのスクロールだけを抑止する。ズーム処理自体は従来どおり onWheel 側で行う。
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const prevent = (e: WheelEvent) => e.preventDefault();
+    el.addEventListener('wheel', prevent, { passive: false });
+    return () => el.removeEventListener('wheel', prevent);
+  }, []);
+
   const handleRulerWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (!onZoomChange) return;
     e.preventDefault();

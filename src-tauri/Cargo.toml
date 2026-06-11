@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.0.0"
+version = "1.0.1"
 description = "Clapper - マルチカム同期エディタ（音声波形でカメラ映像を自動同期するデスクトップ編集アプリ）"
 authors = ["ike <dx009386ikeda@gmail.com>"]
 license = "MIT"

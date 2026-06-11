@@ -14,7 +14,7 @@
 
 | レイヤー | 技術 |
 |---|---|
-| フロントエンド | React 18 + TypeScript + Vite |
+| フロントエンド | React 19 + TypeScript + Vite |
 | デスクトップシェル | Tauri v2（Windows専用、decorations: false でカスタムタイトルバー） |
 | バックエンド処理 | Rust（Tauri コマンド） |
 | 音声/映像処理 | FFmpeg（`ffmpeg.exe` をプロジェクトルートにバンドル） |
@@ -156,7 +156,6 @@ FFmpeg は `ffmpeg.exe` をプロジェクトルートに置くか、PATH に通
 ## 既知の技術的負債
 
 1. **`App.tsx` が約 3100 行** — ロジックは機能ドメインごとにカスタムフックへ分割することが望ましいが、現状はモノリシック
-2. **`README.md` が Vite テンプレートのまま** — プロジェクト固有の内容に差し替えが必要
 
 ---
 
@@ -166,5 +165,4 @@ FFmpeg は `ffmpeg.exe` をプロジェクトルートに置くか、PATH に通
 2. 近距離ジャンプでの音声停止の可能性を精査・修正（VideoPreview シーク条件の見直し）
 3. タイムライン上での「カットカードのドラッグによるアングル切替」UI 改善
 4. オーディオオフセット（映像オフセットとは独立した音声ズレ補正）のより直感的な UI
-5. `README.md` をプロジェクト説明に差し替え
-6. Windows 以外のプラットフォーム対応（現状 `decorations: false` の実装が Windows 前提）
+5. Windows 以外のプラットフォーム対応（現状 `decorations: false` の実装が Windows 前提）

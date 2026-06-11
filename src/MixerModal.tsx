@@ -33,7 +33,16 @@ function VUMeter({ getLevel, width = 24 }: { getLevel: () => { l: number, r: num
     if (!canvas) return;
     const ctx = canvas.getContext('2d')!;
 
+    // ダーティチェック: レベル・ピーク・サイズが前回描画時と同じフレームはスキップ
+    // （アイドル時はレベル0で安定するため描画コストがほぼゼロになる）
+    let lastL = -1, lastR = -1, lastPeakL = -1, lastPeakR = -1, lastH = -1;
+    // グラデーションは高さが変わったときだけ作り直す
+    let grad: CanvasGradient | null = null;
+    let gradH = -1;
+
     const draw = () => {
+      rafRef.current = requestAnimationFrame(draw);
+
       // Dynamic resize
       const parent = canvas.parentElement;
       if (parent) {
@@ -42,7 +51,7 @@ function VUMeter({ getLevel, width = 24 }: { getLevel: () => { l: number, r: num
           canvas.height = targetH;
         }
       }
-      
+
       const W = canvas.width;
       const H = canvas.height;
 
@@ -50,19 +59,25 @@ function VUMeter({ getLevel, width = 24 }: { getLevel: () => { l: number, r: num
       if (l > peakLRef.current) { peakLRef.current = l; peakDecayLRef.current = 60; }
       else if (peakDecayLRef.current > 0) peakDecayLRef.current--;
       else peakLRef.current = Math.max(0, peakLRef.current - 0.002);
-      
+
       if (r > peakRRef.current) { peakRRef.current = r; peakDecayRRef.current = 60; }
       else if (peakDecayRRef.current > 0) peakDecayRRef.current--;
       else peakRRef.current = Math.max(0, peakRRef.current - 0.002);
+
+      if (l === lastL && r === lastR && peakLRef.current === lastPeakL && peakRRef.current === lastPeakR && H === lastH) return;
+      lastL = l; lastR = r; lastPeakL = peakLRef.current; lastPeakR = peakRRef.current; lastH = H;
 
       ctx.clearRect(0, 0, W, H);
       ctx.fillStyle = '#0f172a';
       ctx.fillRect(0, 0, W, H);
 
-      const grad = ctx.createLinearGradient(0, H, 0, 0);
-      grad.addColorStop(0, '#22c55e');
-      grad.addColorStop(0.7, '#eab308');
-      grad.addColorStop(1, '#ef4444');
+      if (!grad || gradH !== H) {
+        grad = ctx.createLinearGradient(0, H, 0, 0);
+        grad.addColorStop(0, '#22c55e');
+        grad.addColorStop(0.7, '#eab308');
+        grad.addColorStop(1, '#ef4444');
+        gradH = H;
+      }
       ctx.fillStyle = grad;
 
       const scaledL = toMeterPos(l);
@@ -82,9 +97,6 @@ function VUMeter({ getLevel, width = 24 }: { getLevel: () => { l: number, r: num
       ctx.fillRect(0, peakYL, barWidth, 2);
       ctx.fillStyle = peakRRef.current > 0.7 ? '#ef4444' : '#fff';
       ctx.fillRect(barWidth + 2, peakYR, barWidth, 2);
-
-
-      rafRef.current = requestAnimationFrame(draw);
     };
     rafRef.current = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(rafRef.current);
@@ -114,20 +126,27 @@ function GRMeter({ getGR }: { getGR: () => number }) {
     const H = canvas.height;
     const MAX_GR = 20;
 
+    // グラデーションは固定サイズなので一度だけ作る
+    const grad = ctx.createLinearGradient(0, 0, W, 0);
+    grad.addColorStop(0, '#eab308');
+    grad.addColorStop(1, '#ef4444');
+
+    // ダーティチェック: GR値が前回描画時と同じフレームはスキップ
+    let lastGr = -1;
+
     const draw = () => {
+      rafRef.current = requestAnimationFrame(draw);
       const gr = clamp(getGR(), 0, MAX_GR);
+      if (gr === lastGr) return;
+      lastGr = gr;
       ctx.clearRect(0, 0, W, H);
       ctx.fillStyle = '#0f172a';
       ctx.fillRect(0, 0, W, H);
       if (gr > 0) {
         const barW = (gr / MAX_GR) * W;
-        const grad = ctx.createLinearGradient(0, 0, W, 0);
-        grad.addColorStop(0, '#eab308');
-        grad.addColorStop(1, '#ef4444');
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, barW, H);
       }
-      rafRef.current = requestAnimationFrame(draw);
     };
     rafRef.current = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(rafRef.current);
